@@ -1,0 +1,26 @@
+2026-06-19 17:15:22,865 [    INFO] === OneLake Role Payload (BATCH_UPSERT) ===
+2026-06-19 17:15:22,866 [    INFO] {
+  "name": "TestRole_Debug",
+  "kind": "Policy",
+  "decisionRules": [
+    {
+      "effect": "Permit",
+      "permission": [
+        {
+          "attributeName": "Path",
+          "attributeValueIncludedIn": [
+            "*"
+          ]
+        },
+        {
+          "attributeName": "Action",
+          "attributeValueIncludedIn": [
+            "Read"
+          ]
+        }
+      ]
+    }
+  ]
+}
+2026-06-19 17:15:22,866 [    INFO] ClientSecretCredential.get_token succeeded
+Minimal role failed: Fabric API error 400: The request could not be processed due to missing or invalid information | RequestId: c6f5a65c-a11f-4044-a97b-d8f818bfbe1c
