@@ -1,3 +1,15 @@
+def create_or_update_role(self, role: Dict) -> Dict:
+    """
+    Create or update a single role.
+    Prefers granular single-role API by default.
+    """
+    try:
+        # Try single-role operation first (more efficient)
+        return self._create_or_update_single_role(role)
+    except Exception as e:
+        logger.warning(f"Single-role operation failed, falling back to batch: {e}")
+        return self._upsert_role_via_batch(role)
+
 def sync_role(
     self,
     role_name: str,
