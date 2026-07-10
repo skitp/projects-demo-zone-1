@@ -1,13 +1,40 @@
+def _create_or_update_single_role(self, role: Dict) -> Dict:
+    """
+    Create or update a **single** data access role using the granular API.
+    This is more efficient than batch when you only need to touch one role.
+    """
+    url = f"{self.base_url}/workspaces/{self.workspace_id}/items/{self.item_id}/dataAccessRoles"
+    
+    if self.use_preview:
+        url += "?preview=true"
+    
+    # Use Overwrite policy so it creates if missing or updates if exists
+    params = {"dataAccessRoleConflictPolicy": "Overwrite"}
+
+    try:
+        resp = self._request(
+            method="POST",
+            url=url,
+            json_body=role,
+            params=params
+        )
+        logger.debug(f"Single-role operation successful for '{role.get('name')}'")
+        return {"status": resp.status_code, "role": resp.json() if resp.content else None}
+    
+    except OneLakeSecurityError as e:
+        logger.warning(f"Single-role POST failed for '{role.get('name')}': {e}")
+        raise  # Let the caller decide to fallback to batch
+
 def create_or_update_role(self, role: Dict) -> Dict:
     """
-    Create or update a single role.
-    Prefers granular single-role API by default.
+    Create or update a role.
+    Default: Uses efficient single-role API.
+    Falls back to batch if single-role fails.
     """
     try:
-        # Try single-role operation first (more efficient)
         return self._create_or_update_single_role(role)
     except Exception as e:
-        logger.warning(f"Single-role operation failed, falling back to batch: {e}")
+        logger.warning(f"Single-role operation failed for '{role.get('name')}', falling back to batch mode: {e}")
         return self._upsert_role_via_batch(role)
 
 def sync_role(
@@ -16,20 +43,19 @@ def sync_role(
     members: List[Dict],
     decision_rules: List[Dict],
     role_kind: str = "Policy",
-    use_batch: bool = False          # ← NEW PARAMETER (default = False)
+    use_batch: bool = False
 ) -> bool:
     """
     Smart sync for any OneLake Data Access Role.
 
-    Default behavior: Uses single-role operations (more efficient).
-    Set use_batch=True to force full batch replace (safer in some edge cases).
+    - Default: Uses single-role API (efficient)
+    - use_batch=True: Forces full batch replace (safer in rare cases)
     """
 
-    logger.info(f"🔄 Starting smart sync for role: {role_name} (use_batch={use_batch})")
+    logger.info(f"🔄 Syncing role '{role_name}' (use_batch={use_batch})")
 
     current_role = self.get_role(role_name)
 
-    # Build the role payload
     new_role = {
         "name": role_name,
         "kind": role_kind,
@@ -38,69 +64,32 @@ def sync_role(
     }
 
     if not current_role:
-        # Role does not exist → create it
         if use_batch:
             self._upsert_role_via_batch(new_role)
         else:
             self.create_or_update_role(new_role)
-        logger.info(f"✅ Role '{role_name}' created")
+        logger.info(f"✅ Created role '{role_name}'")
         return True
 
-    # Role exists → check if anything changed
-    current_decision_rules = current_role.get("decisionRules", [])
+    # Check if update is needed
+    current_decision = current_role.get("decisionRules", [])
     current_members = current_role.get("members", {}).get("microsoftEntraMembers", [])
 
-    if current_decision_rules == decision_rules and current_members == members:
-        logger.info(f"✅ Role '{role_name}' is already up to date. No update needed.")
+    if current_decision == decision_rules and current_members == members:
+        logger.info(f"✅ Role '{role_name}' is already up to date")
         return False
 
-    # Update the role
+    # Perform update
     if use_batch:
         self._upsert_role_via_batch(new_role)
     else:
         self.create_or_update_role(new_role)
 
-    logger.info(f"✅ Role '{role_name}' synced successfully")
+    logger.info(f"✅ Updated role '{role_name}'")
     return True
 
-Also Update create_or_update_role() (Recommended)
-Make create_or_update_role() prefer single-role operations:
-
-def sync_no_pii_columns_role(
-    self,
-    members: List[Dict],
-    pii_tables_and_safe_columns: Dict[str, List[str]],
-    role_name: str = "NoPiiColumns",
-    use_batch: bool = False          # ← NEW: pass through to sync_role
-) -> bool:
-
-    if not pii_tables_and_safe_columns:
-        logger.info("No tables require PII column restrictions.")
-        return False
-
-    # Build decision rules (same as before)...
-    column_rules = []
-    for table_path, visible_columns in pii_tables_and_safe_columns.items():
-        column_rules.append({
-            "tablePath": table_path,
-            "columnNames": visible_columns,
-            "columnEffect": "Permit",
-            "columnAction": ["Read"]
-        })
-
-    decision_rules = [{
-        "effect": "Permit",
-        "permission": [
-            {"attributeName": "Path", "attributeValueIncludedIn": ["*"]},
-            {"attributeName": "Action", "attributeValueIncludedIn": ["Read"]}
-        ],
-        "constraints": {"columns": column_rules}
-    }]
-
-    return self.sync_role(
-        role_name=role_name,
-        members=members,
-        decision_rules=decision_rules,
-        use_batch=use_batch          # ← Pass the parameter
-    )
-
+Method,Behavior,Default
+sync_role(),Prefers single-role API,use_batch=False
+create_or_update_role(),"Tries single-role first, falls back to batch",Single
+_create_or_update_single_role(),New method – calls granular POST API,—
+sync_no_pii_columns_role(),Passes through use_batch parameter,False
