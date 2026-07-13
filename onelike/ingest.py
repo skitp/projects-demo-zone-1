@@ -67,7 +67,8 @@ class Ingest:
         self.metadata_lakehouse_name = "den_lhw_pdi_001_metadata"
 
         self.raise_errors = config["curatedProperties"].get("raiseErrors", True)
-        self.expectations = config["curatedProperties"].get("expectations")
+        self.data_quality_enabled = config["curatedProperties"].get("dataQualityEnabled", False)
+        self.expectations = config["curatedProperties"].get("expectations") # remove in next
         self.quarantine_strategy = config["curatedProperties"].get("quarantineStrategy")
         self.is_cdc = config["sourceSystemProperties"].get("isCdc", False)  # Flag for CDC processing   
 
@@ -76,6 +77,10 @@ class Ingest:
         self._target_lakehouse = None
         self._source_lakehouse = None
         self._metadata_lakehouse = None
+
+        self._source_workspace_id = None
+        self._target_workspace_id = None
+        self._metadata_workspace_id = None
 
         # Logging setup - use target_table as context in logger name
         logger_name = f"ingest.{self.target_table}"
@@ -128,26 +133,29 @@ class Ingest:
 
     def target_lakehouse(self, lakehouse_name: str, workspace_id: Optional[str] = None):
         """
-        Set the target lakehouse and providing the lakehouse id and optional workspace id.
+        Set the target lakehouse (with optional workspace for cross-workspace support).
         """
+        self._target_workspace_id = workspace_id
         self._target_lakehouse = LakehouseManager(lakehouse_name, workspace_id)
-        self.logger.debug(f"Target lakehouse set: {lakehouse_name}")
+        self.logger.debug(f"Target lakehouse set: {lakehouse_name} (workspace_id={workspace_id})")
         return self
 
     def source_lakehouse(self, lakehouse_name: str, workspace_id: Optional[str] = None):
         """
-        Set the source lakehouse and providing the lakehouse id and optional workspace id.
+        Set the source lakehouse (with optional workspace for cross-workspace support).
         """
+        self._source_workspace_id = workspace_id
         self._source_lakehouse = LakehouseManager(lakehouse_name, workspace_id)
-        self.logger.debug(f"Source lakehouse set: {lakehouse_name}")
+        self.logger.debug(f"Source lakehouse set: {lakehouse_name} (workspace_id={workspace_id})")
         return self
     
     def metadata_lakehouse(self, lakehouse_name: str, workspace_id: Optional[str] = None):
         """
-        Set the metadata lakehouse and providing the lakehouse id and optional workspace id.
+        Set the metadata lakehouse (with optional workspace for cross-workspace support).
         """
+        self._metadata_workspace_id = workspace_id
         self._metadata_lakehouse = LakehouseManager(lakehouse_name, workspace_id)
-        self.logger.debug(f"Metadata lakehouse set: {lakehouse_name}")
+        self.logger.debug(f"Metadata lakehouse set: {lakehouse_name} (workspace_id={workspace_id})")
         return self
 
     def _set_load_strategy(self, load_type: str):
@@ -165,7 +173,7 @@ class Ingest:
         The path to the source file to be ingested. This is provided here outside of the config.
         """
         if not self._source_lakehouse:
-            self.source_lakehouse(self.source_lakehouse_name)
+            self.source_lakehouse(self.source_lakehouse_name, self._source_workspace_id)
 
         regex_lakehouse_path = "^abfss:\/\/\w{8}-\w{4}-\w{4}-\w{4}-\w{12}@onelake.dfs.fabric.microsoft.com\/\w{8}-\w{4}-\w{4}-\w{4}-\w{12}"
         if re.search(regex_lakehouse_path, source_file):
@@ -267,7 +275,7 @@ class Ingest:
         self.run_id = run_id
 
         if not self._target_lakehouse:
-            self.target_lakehouse(self.target_lakehouse_name)
+            self.target_lakehouse(self.target_lakehouse_name, self._target_workspace_id)
 
         self.logger.info(f"start_ingest called | elt_id={elt_id} | run_id={run_id}")
         
@@ -352,47 +360,87 @@ class Ingest:
                 if hasattr(self._load_type, 'quarantine_metrics') and self._load_type.quarantine_metrics:
                     self.ALLMETRICS.quarantine.append(self._load_type.quarantine_metrics)
 
+            
+            # === DQ Observability Metrics ===
+            self.ALLMETRICS.dq_enabled = self.data_quality_enabled
+            self.ALLMETRICS.dq_executed = False
+            self.ALLMETRICS.dq_status = "skipped" if not self.data_quality_enabled else "pending"
+            self.ALLMETRICS.expectations = None
+            
             expectation_success = True
-            dq = (
-                Expectations(
-                    self.target_lakehouse_name,
-                    self.target_schema,
-                    self.target_table,
-                    self._source_data
-                )
-                .set_expectations(
-                    self.target_table,
-                    self.target_schema,
-                    self.target_lakehouse_name
-                )
-            )
-            if dq.expectations:
-                self.logger.info("Running DQ expectations")
-                dq.perform_expectations(self.candidate_keys)
-                dq.quarantine(self.quarantine_strategy)
-                self._source_data = dq.expectation_df.drop(*[c for c in dq.expectation_df.columns if c.startswith("dq_")])
-                if dq.quarantine_metrics:
-                    self.ALLMETRICS.quarantine.append(dq.quarantine_metrics)
-                self.ALLMETRICS.expectations = dq.expectation_metrics
-                expectation_success = dq.expectation_metrics["success"]
 
+            self.logger.debug(f"Data quality expectations set to: '{self.data_quality_enabled}')")
+            if self.data_quality_enabled:
+                dq = (
+                    Expectations(
+                        self.target_lakehouse_name,
+                        self.target_schema,
+                        self.target_table,
+                        self._source_data,
+                        workspace_id=self._target_workspace_id,
+                    )
+                    .set_expectations(
+                        self.target_table,
+                        self.target_schema,
+                        self.target_lakehouse_name
+                    )
+                )
+
+                if dq.expectations:
+                    self.logger.info("Running DQ expectations")
+                    dq.perform_expectations(self.candidate_keys)
+                    dq.quarantine(self.quarantine_strategy)
+                    self._source_data = dq.expectation_df.drop(
+                        *[c for c in dq.expectation_df.columns if c.startswith("dq_")]
+                    )
+                    if dq.quarantine_metrics:
+                        self.ALLMETRICS.quarantine.append(dq.quarantine_metrics)
+                    self.ALLMETRICS.expectations = dq.expectation_metrics
+                    expectation_success = dq.expectation_metrics.get("success", True)
+
+                    # Update observability status
+                    self.ALLMETRICS.dq_executed = True
+                    self.ALLMETRICS.dq_status = "passed" if expectation_success else "failed"
+                else:
+                    self.logger.info("No expectations defined for this dataset")
+                    self.ALLMETRICS.dq_status = "no_expectations_defined"
+                    self.ALLMETRICS.dq_executed = False
+            else:
+                self.logger.info("Data quality expectations skipped (dataQualityEnabled=false in config)")
+                self.ALLMETRICS.dq_status = "skipped"
+                self.ALLMETRICS.dq_executed = False
+                
             if expectation_success:
+                self.logger.debug(f"Ready to capture table columns for: '{self.target_table}'")
+                
+                # Capture final columns for OneLake security roles
+                try:
+                    final_columns = self._source_data.columns if self._source_data is not None else []
+                    self.ALLMETRICS.table_columns = {
+                        self.target_table: final_columns
+                    }
+                    self.logger.debug(f"Captured {len(final_columns)} columns for table '{self.target_table}'")
+                except Exception as e:
+                    self.logger.warning(f"Could not capture table columns: {e}")
+                    self.ALLMETRICS.table_columns = {}
+
                 self.logger.info(f"Load type: - {self.load_type} and target_exists - {target_exists}")
                 # Execute load
                 if self.load_type == "merge" and not target_exists:
                     self._load_type.first_time_load(self._source_data)
                 else:
                     self._load_type.ingest(self._source_data)
-        
-                self.METRICS.success = True
 
-                inserts, updates, deletes, output_bytes = self._load_type.get_table_metrics(
-                    table_path
-                )
+                self.METRICS.success = True
+                inserts, updates, deletes, output_bytes = self._load_type.get_table_metrics(table_path)
                 self.METRICS.recordInserts = inserts
                 self.METRICS.recordUpdates = updates
                 self.METRICS.recordDeletes = deletes
                 self.METRICS.outputBytes = output_bytes
+
+            else:
+                self.logger.warning("DQ expectations failed - skipping load (expectation_success=False)")
+                self.METRICS.success = False
 
             self.METRICS.endTime = datetime.now(timezone.utc).isoformat()
 
@@ -423,6 +471,7 @@ class Ingest:
             return self.ALLMETRICS.to_json()
         if frmt == "dict":
             return self.ALLMETRICS.to_dict()
+        raise ValueError(f"Unsupported format: {frmt}")
         
     # --- Watermark Management ---
     def perform_pre_check(self, dataset_config_folder_name: str = "", dataset_file_name: str = "") -> None:
@@ -506,7 +555,7 @@ class Ingest:
             "watermarkValue": str(source_watermark_identifier_value)
         }
         if not self._metadata_lakehouse:
-            self.metadata_lakehouse(self.metadata_lakehouse_name)
+            self.metadata_lakehouse(self.metadata_lakehouse_name, self._metadata_workspace_id)
         file_location = f"{self._metadata_lakehouse.lakehouse_path}/Files/datasets/{self.dataset_config_folder_name}/watermark/{self.dataset_file_name}.json"
         notebookutils.fs.put(file_location, json.dumps(query_extract_json), overwrite=True)
         return self
