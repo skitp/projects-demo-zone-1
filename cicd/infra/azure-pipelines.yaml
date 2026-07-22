@@ -1,0 +1,2655 @@
+parameters:
+  - name: isGitConnect
+    type: boolean
+    displayName: 'Sync Initialize Workspace to Git?'
+    default: false
+
+  - name: waitJobsToFinish
+    type: boolean
+    displayName: 'Wait for Jobs to Finish?'
+    default: false
+
+  - name: upgradeSparkLibraries
+    type: boolean
+    displayName: 'Upgrade spark library?'
+    default: false
+
+  - name: isUpdateFabricRoleAssignments
+    type: boolean
+    displayName: 'Update Fabric Role Assignments'
+    default: true
+
+  - name: isUpdateSparkEnvironment
+    type: boolean
+    displayName: 'Update Spark Environment'
+    default: true
+
+  - name: isUpdateNotebooksAndDataPipelines
+    type: boolean
+    displayName: 'Update Notebooks And Data Pipelines'
+    default: true
+
+  - name: isRunCicdNotebooks
+    type: boolean
+    displayName: 'Run _cicd_ Notebooks'
+    default: true
+
+  - name: isUpdateMonitoringAndMetadataFiles
+    type: boolean
+    displayName: 'Update Monitoring And Metadata Files'
+    default: true
+
+  - name: isUpdateSemanticModelsAndReports
+    type: boolean
+    displayName: 'Update Semantic Models And Reports'
+    default: true
+
+  - name: variableGroup
+    displayName: 'Variable Group'
+    type: string
+    default: 'GDAP-Fluidity-PlatformServices-DEV'    
+
+trigger: none
+
+variables:
+  - group: ${{ parameters.variableGroup }}
+ 
+  - name: workingDirectory
+    value: $(System.DefaultWorkingDirectory)/DevOpsServices/terraform/PlatformServices
+  - name: agentPool
+    value: GDAP-Fluidity-PlatformServices_Self-hosted-AgentPool
+  - name: isDefault
+    value: ${{ and(parameters.isUpdateFabricRoleAssignments, parameters.isUpdateSparkEnvironment, parameters.isUpdateNotebooksAndDataPipelines, parameters.isRunCicdNotebooks, parameters.isUpdateMonitoringAndMetadataFiles, parameters.isUpdateSemanticModelsAndReports) }}
+  - name: isUpdateFabricRoleAssignments
+    value: ${{ parameters.isUpdateFabricRoleAssignments }}
+  - name: isUpdateSparkEnvironment
+    value: ${{ parameters.isUpdateSparkEnvironment }}
+  - name: isUpdateNotebooksAndDatapipelines
+    value: ${{ parameters.isUpdateNotebooksAndDataPipelines }}
+  - name: isRunCicdNotebooks
+    value: ${{ parameters.isRunCicdNotebooks }}
+  - name: isUpdateMonitoringAndMetadataFiles
+    value: ${{ parameters.isUpdateMonitoringAndMetadataFiles }}
+  - name: isUpdateSemanticModelsAndReports
+    value: ${{ parameters.isUpdateSemanticModelsAndReports }}
+
+pool:
+  name: $(agentPool)
+  vmImage: windows-latest
+
+stages:
+- stage: Validate_Infrastructure
+  displayName: 'Validate Infrastructure Configuration'
+  jobs:
+  - job: setup_configuration
+    displayName: 'Setup Configuration'
+    steps:
+    - powershell: |
+            Write-Host "Validating deployment option parameters..."
+            $operations = @(
+                '${{ parameters.isUpdateFabricRoleAssignments }}',
+                '${{ parameters.isUpdateSparkEnvironment }}',
+                '${{ parameters.isUpdateNotebooksAndDataPipelines }}',
+                '${{ parameters.isRunCicdNotebooks }}',
+                '${{ parameters.isUpdateMonitoringAndMetadataFiles }}',
+                '${{ parameters.isUpdateSemanticModelsAndReports }}'
+            ) | ForEach-Object { $_ -eq 'true' }
+
+            if (-not ($operations -contains $true)) {
+                Write-Error "Error: At least one deployment option must be selected."
+                exit 1
+            }
+
+            Write-Host "All required parameters are selected."
+      displayName: 'Validate selected options'      
+      
+    - checkout: self
+      displayName: 'Checkout Repository'
+     
+    - template: ../templates/auth-setup.yml
+     
+    - template: ../templates/login-setup.yml
+   
+  - job: validate_git_environment
+    dependsOn: setup_configuration
+    displayName: 'Validate Git Configuration'
+    steps:
+    - task: PowerShell@2
+      inputs:
+        targetType: 'inline'
+        script: |
+          $isGitConnect = [System.Convert]::ToBoolean("${{ parameters.isGitConnect }}")
+          $environment = "$(ENVIRONMENT)"
+          $isDefault = [System.Convert]::ToBoolean("$(isDefault)")
+         
+          Write-Host "isGitConnect: $isGitConnect"
+          Write-Host "Environment: $environment"
+         
+          if ($isGitConnect -eq $true -and $environment -ne 'int') {
+              Write-Host "##vso[task.LogIssue type=error;]Error: Git sync is only allowed in 'int' environment. Current environment is '$environment'"
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+          }
+
+          if( $isGitConnect -eq $true -and $environment -eq 'int' -and $isDefault -eq $false) {
+              Write-Host "##vso[task.LogIssue type=error;]Error: Git sync can only be performed in the 'Default' execution mode and 'int' environment."
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+          }
+         
+          Write-Host "Validation passed"
+      displayName: 'Validate Git Connect Environment'  
+ 
+- stage: Deploy_Infrastructure
+  displayName: 'Deploy Infrastructure Components'
+  
+  dependsOn: Validate_Infrastructure
+  condition: succeeded('Validate_Infrastructure')
+  jobs:   
+  - deployment: pending_approval
+    displayName: 'Pending Approval for Infrastructure Deployment'
+    environment: $(PIPELINE_ENVIRONMENT_APPROVAL)   
+ 
+  - job: deploy_fabric_resources
+    displayName: 'Deploy Fabric Resources and Configure Services'
+    steps:
+    - checkout: self
+    - template: ../templates/auth-setup.yml
+    # - template: ../templates/convert-notebooks.yml
+    - template: ../templates/login-setup.yml
+
+    - task: PowerShell@2
+      displayName: 'Set Deployment Variables'
+      inputs:
+        targetType: 'inline'
+        script: |
+            # Set any additional variables needed for deployment here
+            Write-Host "Setting deployment variables..."
+            Write-Host "##vso[task.setvariable variable=isDefault]$(isDefault)"
+            Write-Host "##vso[task.setvariable variable=isUpdateFabricRoleAssignments]$(isUpdateFabricRoleAssignments)"
+            Write-Host "##vso[task.setvariable variable=isUpdateSparkEnvironment]$(isUpdateSparkEnvironment)"
+            Write-Host "##vso[task.setvariable variable=isUpgradeSparkLibraries]${{ parameters.upgradeSparkLibraries }}"
+            Write-Host "##vso[task.setvariable variable=isUpdateNotebooksAndDatapipelines]$(isUpdateNotebooksAndDatapipelines)"
+            Write-Host "##vso[task.setvariable variable=isRunCicdNotebooks]$(isRunCicdNotebooks)"
+            Write-Host "##vso[task.setvariable variable=isUpdateMonitoringAndMetadataFiles]$(isUpdateMonitoringAndMetadataFiles)"
+            Write-Host "##vso[task.setvariable variable=isUpdateSemanticModelsAndReports]$(isUpdateSemanticModelsAndReports)"
+
+
+    - task: PowerShell@2
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Check if Az modules are already installed
+          $requiredModules = @(
+              'Az.Accounts'
+          )
+
+          foreach ($module in $requiredModules) {
+              if (!(Get-Module -Name $module -ListAvailable)) {
+                  Write-Host "Installing $module..."
+                  Install-PackageProvider -Name NuGet -Force -Scope CurrentUser -ErrorAction SilentlyContinue
+                  Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+                  Install-Module -Name $module -Force -AllowClobber -Scope CurrentUser -Confirm:$false
+              } else {
+                  Write-Host "$module already installed"
+              }
+          }
+           
+          # Import only needed modules
+          Import-Module Az.Accounts -DisableNameChecking
+
+          Clear-AzContext -Force
+         
+          Update-AzConfig -LoginExperienceV2 off
+          Update-AzConfig -EnableLoginByWam $false
+
+          $username = '$(SERVICE_ACCOUNT_NAME)'
+          $userPwd = '$(SERVICE_ACCOUNT_SECRET)' | ConvertTo-SecureString -AsPlainText -Force
+          $credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList $username, $userPwd
+
+          Connect-AzAccount -Tenant $(ARM_TENANT_ID) -Credential $credential -AuthScope 'api://spn-gdap-fabricpview-usercontext'
+
+          $secureFabricToken = (Get-AzAccessToken -ResourceUrl 'https://api.fabric.microsoft.com' -AsSecureString).Token
+
+          $Ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureFabricToken)
+          $fabricToken = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($Ptr)
+          $env:FABRIC_TOKEN = $fabricToken
+          Write-Host "##vso[task.setvariable variable=FABRIC_TOKEN]$fabricToken"
+
+      displayName: 'Configure Azure Authentication and Get Fabric Token'    
+
+    - task: PowerShell@2
+      inputs:
+        targetType: 'inline'
+        script: |
+          $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Fabric-CapacityState.ps1"
+          & $scriptPath 
+          # exits if Fabric-CapacityState.ps1 returns non-zero exit code
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "##vso[task.LogIssue type=error;]Fabric Capacity State validation failed."
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+            } else {
+              Write-Host "Fabric Capacity State is active."
+            }
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        TF_VAR_capacity_id: $(TF_VAR_capacity_id)
+      displayName: 'Validate Fabric Capacity State'  
+
+    - task: PowerShell@2
+      name: prepShortcutVars
+      displayName: 'Prepare Lakehouse Shortcut Variables'
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              # Initialize empty array for formatted shortcuts
+              $detailedShortcuts = @()
+              $shortcutGroups = @{}
+           
+              Write-Host "##[debug]Processing shortcut variables from environment..."
+           
+              # Iterate through all environment variables
+              foreach ($item in (Get-Item env:*)) {
+                  # Check if it's a shortcut variable (starts with 'shortcut.')
+
+                  if ($item.Name.ToLower().StartsWith('shortcut_')) {
+                      $logicalName = $item.Name.ToLower()
+                  
+                      $logicalName = $logicalName -replace '^shortcut_', 'shortcut.'
+
+                      $lastUnderscoreIndex = $logicalName.LastIndexOf('_')
+                      if ($lastUnderscoreIndex -gt 0) {
+                          $logicalName = $logicalName.Substring(0, $lastUnderscoreIndex) + '.' + $logicalName.Substring($lastUnderscoreIndex + 1)
+                      }
+
+                      Write-Host "##[debug]Found shortcut variable: $($item.Name) = $($item.Value)"
+                   
+                      # Parse the variable name: shortcut.{name}.{property}
+                      $nameParts = $logicalName -split "\."
+                   
+                      # Skip if the format is incorrect
+                      if ($nameParts.Length -ne 3) {
+                          Write-Host "##[warning]Invalid shortcut variable format: $($item.Name). Expected format: shortcut.{name}.{property}"
+                          continue
+                      }
+                   
+                      $shortcutName = $nameParts[1]
+                      $propertyName = $nameParts[2]
+                      $propertyValue = $item.Value
+                   
+                      # Initialize the shortcut object if it doesn't exist
+                      if (-not $shortcutGroups.ContainsKey($shortcutName)) {
+                          $shortcutGroups[$shortcutName] = @{}
+                      }
+                   
+                      # Add the property to the shortcut
+                      $shortcutGroups[$shortcutName][$propertyName] = $propertyValue
+                  }
+              }
+           
+              # Transform the grouped shortcuts into an array of objects
+              foreach ($name in $shortcutGroups.Keys) {
+                  $properties = $shortcutGroups[$name]
+               
+                  # Only add shortcuts that have both required properties
+                  $WorkspaceName = $env:TF_VAR_workspace_names
+                  $WorkspaceName = $WorkspaceName.Replace('[', '["').Replace(']', '"]').Replace(',', '","') -replace '"\s+', '"'
+                  $WorkspaceName = $WorkspaceName.Trim('[', ']').Trim('"')
+                  if ($properties.ContainsKey("lakehouse") -and $properties.ContainsKey("workspace")) {
+                      $detailedShortcuts += [PSCustomObject]@{
+                        name = $name
+                        workspace = $properties["workspace"]
+                        lakehouse = $properties["lakehouse"]
+                      }                   
+                      Write-Host "##[debug]Added shortcut: $name (Lakehouse: $($properties["lakehouse"]), Workspace: $($properties["workspace"]))"
+                  }
+                  else {
+                      $detailedShortcuts += [PSCustomObject]@{
+                        name = $name
+                        workspace = $WorkspaceName
+                        lakehouse = $properties["lakehouse"]
+                      }                  
+                      Write-Host "##[debug]Added shortcut: $name (Lakehouse: $($properties["lakehouse"]), Workspace: $WorkspaceName)"
+                  }
+              }
+           
+              # Check if any valid shortcuts were found
+              if ($detailedShortcuts.Count -eq 0) {
+                  Write-Host "##[warning]No valid shortcut variables found with both lakehouse and workspace properties"
+              } else {
+                  Write-Host "##[debug]Processed $($detailedShortcuts.Count) valid shortcut definitions"              
+
+                  # Convert to JSON
+                  $detailedShortcutsJson = $detailedShortcuts | ConvertTo-Json -Depth 5 -Compress
+               
+                  if ($detailedShortcuts.Count -eq 1) {
+                    # prepend and append brackets to make it a JSON array
+                    $detailedShortcutsJson = "[$detailedShortcutsJson]"
+                  }
+                   
+                  # Log the JSON for debugging
+                  Write-Host "##[debug]Detailed Shortcuts JSON: $detailedShortcutsJson"
+               
+                  # Set as pipeline variable
+                  Write-Host "##vso[task.setvariable variable=FABRIC_SHORTCUTS_DETAILED]$detailedShortcutsJson"
+              }
+          } catch {
+              Write-Error "Error processing shortcut variables: $_"
+              Write-Error $_.ScriptStackTrace
+              exit 1
+          }
+
+    - task: PowerShell@2
+      name: prepPrivateEndpointsVars
+      displayName: 'Prepare Private Endpoints Variables (PEP)'
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              # Initialize empty array for formatted PEP
+              $detailedPEPs = @()
+              $PEPGroups = @{}
+           
+              Write-Host "##[debug]Processing PEP variables from environment..."
+           
+              # Iterate through all environment variables
+              foreach ($item in (Get-Item env:*)) {
+                  # Check if it's a pep variable (starts with 'pep.')
+
+                  if ($item.Name.ToLower().StartsWith('pep_')) {
+                      $item.Name = $item.Name.ToLower().Replace('pep_', 'pep.').Replace('_', '.')
+                  }
+                  if ($item.Name -like "pep.*") {
+                      Write-Host "##[debug]Found PEP variable: $($item.Name) = $($item.Value)"
+                   
+                      # Parse the variable name: pep.{name}.{property}
+                      $nameParts = $item.Name -split "\."
+                   
+                      # Skip if the format is incorrect
+                      if ($nameParts.Length -ne 3) {
+                          Write-Host "##[warning]Invalid pep variable format: $($item.Name). Expected format: pep.{name}.{property}"
+                          continue
+                      }
+                   
+                      $pepName = $nameParts[1]
+                      $propertyName = $nameParts[2]
+                      $propertyValue = $item.Value
+                   
+                      # Initialize the PEP object if it doesn't exist
+                      if (-not $PEPGroups.ContainsKey($pepName)) {
+                          $PEPGroups[$pepName] = @{}
+                      }
+                   
+                      # Add the property to the PEP
+                      $PEPGroups[$pepName][$propertyName] = $propertyValue
+                  }
+              }
+           
+              # Transform the grouped PEPs into an array of objects
+              foreach ($name in $PEPGroups.Keys) {
+                  $properties = $PEPGroups[$name]
+
+                  $detailedPEPs += [PSCustomObject]@{
+                        allowed = $properties["allowed"]
+                        resourceId = $properties["resourceId"]
+                        subresourceType = $properties["subresourceType"]
+                    }
+                 
+                  Write-Host "##[debug]Added PEP: $name (Allowed: $($properties["allowed"]), resourceId: $($properties["resourceId"]), subresourceType: $($properties["subresourceType"]))"
+              }
+           
+              # Check if any valid PEP were found
+              if ($detailedPEPs.Count -eq 0) {
+                  Write-Host "##[warning]No valid PEP variables found with both allowed and resourceId properties"
+              } else {
+                  Write-Host "##[debug]Processed $($detailedPEPs.Count) valid PEP definitions"              
+
+                  # Convert to JSON
+                  $detailedPEPJson = $detailedPEPs | ConvertTo-Json -Depth 5 -Compress
+               
+                  if ($detailedPEPs.Count -eq 1) {
+                    # prepend and append brackets to make it a JSON array
+                    $detailedPEPJson = "[$detailedPEPJson]"
+                  }
+                   
+                  # Log the JSON for debugging
+                  Write-Host "##[debug]Detailed PEPs JSON: $detailedPEPJson"
+               
+                  # Set as pipeline variable
+                  Write-Host "##vso[task.setvariable variable=FABRIC_PEP_DETAILED]$detailedPEPJson"
+              }
+
+              $formattedSparkCompute = @{}
+              foreach ($item in (Get-Item env:*)) { 
+                  if ($item.Name.ToLower().StartsWith('sparkcompute_')) {
+                      # Extract original name without prefix
+                      $displayName = $item.Name.ToLower().Replace('sparkcompute_', '')
+
+                      # Add formatted spark compute object
+                      $formattedSparkCompute[$displayName] = $item.Value
+
+                  }
+              }
+              Write-Host "##[debug]Formatted Spark Compute: $($formattedSparkCompute | ConvertTo-Json -Compress)"
+
+              $sparkComputeJson = $formattedSparkCompute | ConvertTo-Json -Compress              
+              Write-Host "##vso[task.setvariable variable=FABRIC_SPARK_COMPUTE]$sparkComputeJson"
+
+          } catch {
+              Write-Error "Error processing PEP variables: $_"
+              Write-Error $_.ScriptStackTrace
+              exit 1
+          }
+
+    - task: PowerShell@2
+      name: prepSemanticModelVars
+      displayName: 'Prepare Semantic Model Lakehouse Variables'
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              # Initialize empty array for formatted shortcuts
+              $detailedSemanticModels = @()
+              $semanticModelGroups = @{}
+           
+              Write-Host "##[debug]Processing semantic model variables ..."
+           
+              # Iterate through all environment variables
+              foreach ($item in (Get-Item env:*)) {
+                  # Check if it's a semantic model variable (starts with 'sm.')
+
+                  if ($item.Name.ToLower().StartsWith('sm_')) {
+                      $logicalName = $item.Name.ToLower()
+                  
+                      $logicalName = $logicalName -replace '^sm_', 'sm.'
+
+                      $lastUnderscoreIndex = $logicalName.LastIndexOf('_')
+                      if ($lastUnderscoreIndex -gt 0) {
+                          $logicalName = $logicalName.Substring(0, $lastUnderscoreIndex) + '.' + $logicalName.Substring($lastUnderscoreIndex + 1)
+                      }
+
+                      Write-Host "##[debug]Found semantic model variable: $($item.Name) = $($item.Value)"
+
+                      # Parse the variable name: sm.{name}.{property}
+                      $nameParts = $logicalName -split "\."
+                   
+                      # Skip if the format is incorrect
+                      if ($nameParts.Length -ne 3) {
+                          Write-Host "##[warning]Invalid semantic model variable format: $($item.Name). Expected format: sm.{name}.{property}"
+                          continue
+                      }
+
+                      $semanticModelName = $nameParts[1]
+                      $propertyName = $nameParts[2]
+                      $propertyValue = $item.Value
+                   
+                      # Initialize the semantic model object if it doesn't exist
+                      if (-not $semanticModelGroups.ContainsKey($semanticModelName)) {
+                          $semanticModelGroups[$semanticModelName] = @{}
+                      }
+                   
+                      # Add the property to the semantic model
+                      $semanticModelGroups[$semanticModelName][$propertyName] = $propertyValue
+                  }
+              }
+           
+              # Transform the grouped semantic models into an array of objects
+              foreach ($name in $semanticModelGroups.Keys) {
+                  $properties = $semanticModelGroups[$name]
+               
+                  # Only add semantic models that have both required properties
+                  if ($properties.ContainsKey("newValue")) {
+                      $detailedSemanticModels += [PSCustomObject]@{
+                          name = $name
+                          newValue = $properties["newValue"]
+                          connectionName = $properties["connectionName"]
+                      }
+
+                      Write-Host "##[debug]Added semantic model: $name (newValue: $($properties["newValue"]))"
+                  }
+                  else {
+                      Write-Host "##[warning]Semantic model $name is missing required properties (newValue)"
+                  }
+              }
+           
+              # Check if any valid semantic models were found
+              if ($detailedSemanticModels.Count -eq 0) {
+                  Write-Host "##[warning]No valid semantic models found with both oldValue and newValue properties"
+              } else {
+                  Write-Host "##[debug]Processed $($detailedSemanticModels.Count) valid semantic models"
+
+                  # Convert to JSON
+                  $detailedSemanticModelsJson = $detailedSemanticModels | ConvertTo-Json -Depth 5 -Compress
+
+                  if ($detailedSemanticModels.Count -eq 1) {
+                    # prepend and append brackets to make it a JSON array
+                    $detailedSemanticModelsJson = "[$detailedSemanticModelsJson]"
+                  }
+                   
+                  # Log the JSON for debugging
+                  Write-Host "##[debug]Detailed Semantic Models JSON: $detailedSemanticModelsJson"
+
+                  # Set as pipeline variable
+                  Write-Host "##vso[task.setvariable variable=FABRIC_SEMANTIC_MODELS_DETAILED]$detailedSemanticModelsJson"
+              }
+          } catch {
+              Write-Error "Error processing semantic model variables: $_"
+              Write-Error $_.ScriptStackTrace
+              exit 1
+          }
+
+    - task: PowerShell@2
+      name: prepSemanticModelParameterVars
+      displayName: 'Prepare Semantic Model Parameters Updates'
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              # Initialize empty array for formatted shortcuts
+              $detailedSemanticModelsParameters = @()
+              $semanticModelParameterGroups = @{}
+           
+              Write-Host "##[debug]Processing semantic model parameters ..."
+           
+              # Iterate through all environment variables
+              foreach ($item in (Get-Item env:*)) {
+                  # Check if it's a semantic model parameter variable (starts with 'smParameter.')
+
+                  if ($item.Name.ToLower().StartsWith('smparameter_')) {
+                      $logicalName = $item.Name.ToLower()
+                  
+                      $logicalName = $logicalName -replace '^smparameter_', 'smparameter.'
+
+                      $lastUnderscoreIndex = $logicalName.LastIndexOf('_')
+                      if ($lastUnderscoreIndex -gt 0) {
+                          $logicalName = $logicalName.Substring(0, $lastUnderscoreIndex) + '.' + $logicalName.Substring($lastUnderscoreIndex + 1)
+                      }
+
+                      Write-Host "##[debug]Found semantic model parameters variable: $($item.Name) = $($item.Value)"
+
+                      # Parse the variable name: smParameter.{name}.{property}
+                      $nameParts = $logicalName -split "\."
+                   
+                      # Skip if the format is incorrect
+                      if ($nameParts.Length -ne 3) {
+                          Write-Host "##[warning]Invalid semantic model parameter variable format: $($item.Name). Expected format: smParameter.{name}.{property}"
+                          continue
+                      }
+
+                      $semanticModelParameterName = $nameParts[1]
+                      $propertyName = $nameParts[2]
+                      $propertyValue = $item.Value
+                   
+                      # Initialize the semantic model object if it doesn't exist
+                      if (-not $semanticModelParameterGroups.ContainsKey($semanticModelParameterName)) {
+                          $semanticModelParameterGroups[$semanticModelParameterName] = @{}
+                      }
+                   
+                      # Add the property to the semantic model
+                      $semanticModelParameterGroups[$semanticModelParameterName][$propertyName] = $propertyValue
+                  }
+              }
+           
+              # Transform the grouped semantic models into an array of objects
+              foreach ($name in $semanticModelParameterGroups.Keys) {
+                  $properties = $semanticModelParameterGroups[$name]
+               
+                  # Only add semantic models that have required properties
+                  if ($properties.ContainsKey("newValue")) {
+                      $detailedSemanticModelsParameters += [PSCustomObject]@{
+                          name = $name
+                          newValue = $properties["newValue"]
+                      }
+
+                      Write-Host "##[debug]Added semantic model parameter: $name (newValue: $($properties["newValue"]))"
+                  }
+                  else {
+                      Write-Host "##[warning]Semantic model parameter $name is missing required properties (newValue)"
+                  }
+              }
+           
+              # Check if any valid semantic models parameter were found
+              if ($detailedSemanticModelsParameters.Count -eq 0) {
+                  Write-Host "##[warning]No valid semantic models found with both oldValue and newValue properties"
+              } else {
+                  Write-Host "##[debug]Processed $($detailedSemanticModelsParameters.Count) valid semantic models"
+
+                  # Convert to JSON
+                  $detailedSemanticModelsParameterJson = $detailedSemanticModelsParameters | ConvertTo-Json -Depth 5 -Compress
+
+                  if ($detailedSemanticModelsParameters.Count -eq 1) {
+                    # prepend and append brackets to make it a JSON array
+                    $detailedSemanticModelsParameterJson = "[$detailedSemanticModelsParameterJson]"
+                  }
+                   
+                  # Log the JSON for debugging
+                  Write-Host "##[debug]Detailed Semantic Models JSON: $detailedSemanticModelsParameterJson"
+
+                  # Set as pipeline variable
+                  Write-Host "##vso[task.setvariable variable=FABRIC_SEMANTIC_MODELS_PARAMETER_DETAILED]$detailedSemanticModelsParameterJson"
+              }
+          } catch {
+              Write-Error "Error processing semantic model variables: $_"
+              Write-Error $_.ScriptStackTrace
+              exit 1
+          }
+
+    - task: PowerShell@2
+      name: prepManagedConnectionsVars
+      displayName: 'Prepare Managed Connections Variables'
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              # Initialize empty array
+              $detailedManagedConnections = @()
+              $managedConnectionGroups = @{}
+           
+              Write-Host "##[debug]Processing managed connection variables from environment..."
+           
+              # Iterate through all environment variables
+              foreach ($item in (Get-Item env:*)) {
+
+                  if ($item.Name.ToLower().StartsWith('mngconnection_')) {
+                      $item.Name = $item.Name.ToLower().Replace('mngconnection_', 'managedConnection.').Replace('_', '.')
+                  }
+                  if ($item.Name -like "managedConnection.*") {
+                      Write-Host "##[debug]Found Managed Connection variable: $($item.Name) = $($item.Value)"
+                   
+                      # Parse the variable name: managedConnection.{name}.{property}
+                      $nameParts = $item.Name -split "\."
+                   
+                      # Skip if the format is incorrect
+                      if ($nameParts.Length -ne 3) {
+                          Write-Host "##[warning]Invalid managed connection variable format: $($item.Name). Expected format: managedConnection.{name}.{property}"
+                          continue
+                      }
+                   
+                      $managedConnectionName = $nameParts[1]
+                      $propertyName = $nameParts[2]
+                      $propertyValue = $item.Value
+                   
+                      # Initialize the managed connection object if it doesn't exist
+                      if (-not $managedConnectionGroups.ContainsKey($managedConnectionName)) {
+                          $managedConnectionGroups[$managedConnectionName] = @{}
+                      }
+                   
+                      # Add the property to the managed connection
+                      $managedConnectionGroups[$managedConnectionName][$propertyName] = $propertyValue
+                  }
+              }
+
+              # Transform the grouped managed connections into an array of objects
+              foreach ($name in $managedConnectionGroups.Keys) {
+                  $properties = $managedConnectionGroups[$name]
+
+                  $detailedManagedConnections += [PSCustomObject]@{
+                        original_name = $properties["original-name"]
+                        new_name = $properties["new-name"]
+                        guid = $properties["guid"]
+                    }
+
+                  Write-Host "##[debug]Added Managed Connection: $name (Original Name: $($properties["original-name"]), New Name: $($properties["new-name"]), GUID: $($properties["guid"]))"
+              }
+
+              # Check if any valid managed connections were found
+              if ($detailedManagedConnections.Count -eq 0) {
+                  Write-Host "##[warning]No valid Managed Connection variables found with both original_name and new_name properties"
+              } else {
+                  Write-Host "##[debug]Processed $($detailedManagedConnections.Count) valid Managed Connection definitions"
+
+                  # Convert to JSON
+                  $detailedManagedConnectionsJson = $detailedManagedConnections | ConvertTo-Json -Depth 5 -Compress
+
+                  if ($detailedManagedConnections.Count -eq 1) {
+                    # prepend and append brackets to make it a JSON array
+                    $detailedManagedConnectionsJson = "[$detailedManagedConnectionsJson]"
+                  }
+                   
+                  # Log the JSON for debugging
+                  Write-Host "##[debug]Detailed Managed Connections JSON: $detailedManagedConnectionsJson"
+
+                  # Set as pipeline variable
+                  Write-Host "##vso[task.setvariable variable=FABRIC_MANAGED_CONNECTIONS_DETAILED]$detailedManagedConnectionsJson"
+              }
+          } catch {
+              Write-Error "Error processing Managed Connection variables: $_"
+              Write-Error $_.ScriptStackTrace
+              exit 1
+          }
+
+    - task: PowerShell@2
+      inputs:
+        targetType: 'inline'
+        script: |
+            $WorkspaceName = $env:TF_VAR_workspace_names
+            $WorkspaceName = $WorkspaceName.Replace('[', '["').Replace(']', '"]').Replace(',', '","') -replace '"\s+', '"'
+            $WorkspaceName = $WorkspaceName.Trim('[', ']').Trim('"')
+            $EnsureWorkspaceExists = if ("$(isDefault)" -eq "true") { $false } else { $true }
+
+            $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Create-Workspace.ps1"
+            # $WorkspaceNames is an array of workspace name to ID mappings
+            $WorkspaceNames = & $scriptPath -WorkspaceName "$WorkspaceName" -EnsureWorkspaceExists $EnsureWorkspaceExists
+
+            # Display workspace IDs and names for debugging
+            Write-Host "##[debug]Workspace Names and IDs: $($WorkspaceNames | ConvertTo-Json -Compress)"
+
+            Write-Host "##vso[task.setvariable variable=WORKSPACE_IDS]$($WorkspaceNames | ConvertTo-Json -Compress)"
+            Write-Host "##vso[task.setvariable variable=WORKSPACE_NAME]$WorkspaceName"
+            # get the workspace ID for the specified workspace name
+            $workspace_id = $WorkspaceNames.$WorkspaceName
+            Write-Host "##vso[task.setvariable variable=WORKSPACE_ID]$workspace_id"
+
+            $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Assign-Capacity-To-Workspace.ps1"
+            & $scriptPath  -WorkspaceId "$workspace_id" -CapacityId "$env:TF_VAR_capacity_id"
+
+            # # Display workspace id and CapacityId for debugging
+            # Write-Host "##[debug]Workspace ID: $workspace_id"
+            # Write-Host "##[debug]Capacity ID: $env:TF_VAR_capacity_id"
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+      displayName: 'Fabric Workspace'
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateFabricRoleAssignments'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+            try {
+                
+                $admin_group_principal_ids = $env:TF_VAR_admin_group_principal_ids
+                $admin_sp_principal_ids = $env:TF_VAR_admin_sp_principal_ids
+                $contributor_group_principal_ids = $env:TF_VAR_contributor_group_principal_ids
+                $viewer_group_principal_ids = $env:TF_VAR_viewer_group_principal_ids
+                $admin_user_principal_ids = $env:TF_VAR_admin_user_principal_ids
+                $workspace_names = $env:TF_VAR_workspace_names
+                $workspace_id = $env:WORKSPACE_ID
+                
+                Write-Host "##[section]Loading configuration variables"
+                Write-Host "##[debug]Workspace ID: $workspace_id"
+                Write-Host "##[debug]Workspace Names: $workspace_names"
+                
+                Write-Host "##[section]Parsing principal ID arrays"
+                
+                # Function to parse array strings into PowerShell arrays
+                function Parse-PrincipalIdArray {
+                    param([string]$ArrayString)
+                    
+                    if ([string]::IsNullOrEmpty($ArrayString) -or $ArrayString -eq '[]') {
+                        return @()
+                    }
+                    
+                    # Remove brackets and split by comma
+                    $cleaned = $ArrayString.Trim().TrimStart('[').TrimEnd(']').Trim()
+                    if ([string]::IsNullOrEmpty($cleaned)) {
+                        return @()
+                    }
+                    
+                    # Split and clean each ID
+                    $ids = $cleaned -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                    
+                    return @($ids)
+                }
+                
+                # Parse all principal ID arrays
+                $adminGroupIds = Parse-PrincipalIdArray -ArrayString $admin_group_principal_ids
+                $viewerGroupIds = Parse-PrincipalIdArray -ArrayString $viewer_group_principal_ids
+                $contributorGroupIds = Parse-PrincipalIdArray -ArrayString $contributor_group_principal_ids
+                $adminSpIds = Parse-PrincipalIdArray -ArrayString $admin_sp_principal_ids
+                $adminUserIds = Parse-PrincipalIdArray -ArrayString $admin_user_principal_ids
+                
+                Write-Host "##[debug]Parsed Admin Groups: $($adminGroupIds.Count) IDs"
+                # display admin group IDs for debugging
+                Write-Host "##[debug]Admin Group IDs: $($adminGroupIds -join ', ')"
+                Write-Host "##[debug]Parsed Viewer Groups: $($viewerGroupIds.Count) IDs"
+                Write-Host "##[debug]Viewer Group IDs: $($viewerGroupIds -join ', ')"
+                Write-Host "##[debug]Parsed Contributor Groups: $($contributorGroupIds.Count) IDs"
+                Write-Host "##[debug]Contributor Group IDs: $($contributorGroupIds -join ', ')"
+                Write-Host "##[debug]Parsed Admin SPs: $($adminSpIds.Count) IDs"
+                Write-Host "##[debug]Admin SP IDs: $($adminSpIds -join ', ')"
+                Write-Host "##[debug]Parsed Admin Users: $($adminUserIds.Count) IDs"
+                Write-Host "##[debug]Admin User IDs: $($adminUserIds -join ', ')"
+                
+                Write-Host "##[section]Configuring Workspace Role Assignments via REST API"
+                
+                # Check if role assignment script exists
+                $roleAssignmentScriptPath = "$(Build.SourcesDirectory)/DevOpsServices/Pipelines/scripts/Set-FabricWorkspaceRoleAssignments.ps1"
+                
+                if (-not (Test-Path $roleAssignmentScriptPath)) {
+                    Write-Host "##vso[task.LogIssue type=warning;]Role assignment script not found at: $roleAssignmentScriptPath"
+                    Write-Host "##[debug]Skipping workspace role assignment configuration"
+                }
+                else {
+                    Write-Host "##[debug]Executing workspace role assignment script"
+                    
+                    # Build parameter hashtable
+                    $roleAssignmentParams = @{
+                        WorkspaceId = $workspace_id
+                    }
+                    
+                    # Add arrays only if they have values
+                    if ($adminGroupIds.Count -gt 0) {
+                        $roleAssignmentParams.AdminGroupPrincipalIds = $adminGroupIds
+                        Write-Host "##[debug]  Adding $($adminGroupIds.Count) admin groups"
+                    }
+                    
+                    if ($viewerGroupIds.Count -gt 0) {
+                        $roleAssignmentParams.ViewerGroupPrincipalIds = $viewerGroupIds
+                        Write-Host "##[debug]  Adding $($viewerGroupIds.Count) viewer groups"
+                    }
+                    
+                    if ($contributorGroupIds.Count -gt 0) {
+                        $roleAssignmentParams.ContributorGroupPrincipalIds = $contributorGroupIds
+                        Write-Host "##[debug]  Adding $($contributorGroupIds.Count) contributor groups"
+                    }
+                    
+                    if ($adminSpIds.Count -gt 0) {
+                        $roleAssignmentParams.AdminSpPrincipalIds = $adminSpIds
+                        Write-Host "##[debug]  Adding $($adminSpIds.Count) admin service principals"
+                    }
+                    
+                    if ($adminUserIds.Count -gt 0) {
+                        $roleAssignmentParams.AdminUserPrincipalIds = $adminUserIds
+                        Write-Host "##[debug]  Adding $($adminUserIds.Count) admin users"
+                    }
+                    
+                    # Execute role assignment script
+                    try {
+                        Write-Host "##[command]Executing: Set-FabricWorkspaceRoleAssignments.ps1"
+                        
+                        & $roleAssignmentScriptPath @roleAssignmentParams
+                        
+                        if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
+                            Write-Host "##[section]✓ Workspace role assignments configured successfully" -ForegroundColor Green
+                        }
+                        else {
+                            Write-Host "##vso[task.LogIssue type=error;]Role assignment script failed with exit code: $LASTEXITCODE"
+                            throw "Workspace role assignment configuration failed"
+                        }
+                    }
+                    catch {
+                        Write-Host "##vso[task.LogIssue type=error;]Failed to configure workspace role assignments: $($_.Exception.Message)"
+                        exit 1
+                    }
+                }
+            }
+            catch {
+                Write-Host "##vso[task.LogIssue type=error;]Unexpected error during role assignment configuration: $($_.Exception.Message)"
+                exit 1
+            }
+
+      displayName: 'Deploy Fabric Role Assignments'
+      env:
+        SERVICE_ACCOUNT_NAME: $(SERVICE_ACCOUNT_NAME)
+        SERVICE_ACCOUNT_SECRET: $(SERVICE_ACCOUNT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ENVIRONMENT: $(ENVIRONMENT)
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'), eq(variables['isUpdateSemanticModelsAndReports'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+            try {
+                
+          
+                Write-Host "##[section]List Fabric Connections"
+                # Check if Fabric connections script exists
+                $fabricConnectionsScriptPath = "$(Build.SourcesDirectory)/DevOpsServices/Pipelines/scripts/Get-FabricConnections.ps1"
+                
+                if (-not (Test-Path $fabricConnectionsScriptPath)) {
+                    Write-Host "##vso[task.LogIssue type=warning;]Fabric connection script not found at: $fabricConnectionsScriptPath"
+                    Write-Host "##[debug]Skipping fabric connections listing"
+                }
+                else {
+                    Write-Host "##[debug]Executing fabric connections script"
+                    
+                    # Execute fabric connections script
+                    try {
+                        Write-Host "##[command]Executing: Get-FabricConnections.ps1"
+                        
+                        & $fabricConnectionsScriptPath
+                        
+                        if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
+                            Write-Host "##[section] Fabric connections listed successfully" -ForegroundColor Green
+
+                            $fabricConnections = Get-Content -Path "$(Build.SourcesDirectory)/DevOpsServices/Pipelines/scripts/connections.json" | ConvertFrom-Json
+
+                            Write-Host "Fabric Connections:"
+                            foreach ($connection in $fabricConnections) {
+                                Write-Host "Display Name: $($connection.displayName)"
+                                Write-Host "ID: $($connection.id)"
+                                Write-Host "Connectivity Type: $($connection.connectivityType)"
+                                Write-Host "Connection Details: $($connection.connectionDetails | ConvertTo-Json -Compress)"
+                            }
+                            Write-Host "##vso[task.setvariable variable=FABRIC_CONNECTIONS]$($fabricConnections | ConvertTo-Json -Compress)"   
+                        }
+                        else {
+                            Write-Host "##vso[task.LogIssue type=error;]Fabric connections script failed with exit code: $LASTEXITCODE"
+                            throw "Fabric connections listing failed"
+                        }
+                    }
+                    catch {
+                        Write-Host "##vso[task.LogIssue type=error;]Failed to list fabric connections: $($_.Exception.Message)"
+                        exit 1
+                    }
+                }
+            }
+            catch {
+                Write-Host "##vso[task.LogIssue type=error;]Unexpected error during fabric connections listing: $($_.Exception.Message)"
+                exit 1
+            }
+
+      displayName: 'List Fabric Connections'
+      env:
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+            try {
+                Write-Host "##[section]Processing Ellie Notebooks"
+            
+                # Base path for Ellie notebooks
+                $basePath = "$(Build.SourcesDirectory)/src/ellie"
+            
+                if (-not (Test-Path $basePath)) {
+                    Write-Warning "Ellie source path not found: $basePath"
+                    exit 0
+                }
+            
+                # Find all .platform files (similar to Terraform fileset)
+                $platformFiles = Get-ChildItem -Path $basePath -Recurse -Filter ".platform" |
+                    Where-Object { $_.Directory.Name -like "*.Notebook" }
+            
+                Write-Host "##[debug]Found $($platformFiles.Count) notebook(s) to process"
+            
+                $ellie_notebooks = @()
+                foreach ($platformFile in $platformFiles) {
+                    $notebookDir = $platformFile.Directory.FullName
+                    $notebookName = $platformFile.Directory.Name -replace '\.Notebook$', ''
+                
+                    Write-Host ""
+                    Write-Host "##[group]Processing notebook: $notebookName"
+                
+                    # Read platform metadata
+                    $platformContent = Get-Content $platformFile.FullName | ConvertFrom-Json
+                    $displayName = $platformContent.metadata.displayName
+                    $lakehouseName = $platformContent.metadata.default_lakehouse_name
+                
+                    Write-Host "  Display Name: $displayName"
+                    Write-Host "  Lakehouse: $lakehouseName"
+
+                    # Skip if lakehouse name and display name are not defined
+                    if ([string]::IsNullOrEmpty($lakehouseName) -or [string]::IsNullOrEmpty($displayName)) {
+                        Write-Warning "  Display name or lakehouse name is missing in metadata for $notebookName, skipping"
+                        Write-Host "##[endgroup]"
+                        continue
+                    }
+                
+                    # Find SQL file in notebook directory
+                    $sqlFile = Get-ChildItem -Path $notebookDir -Filter "*.sql" | Select-Object -First 1
+                
+                    if ($null -eq $sqlFile) {
+                        Write-Warning "  No SQL file found for $notebookName, skipping"
+                        Write-Host "##[endgroup]"
+                        continue
+                    }
+                
+                    Write-Host "  SQL File: $($sqlFile.Name)"
+                
+                    # Create/update notebook
+                    $params = @{
+                        WorkspaceId = $env:WORKSPACE_ID
+                        DisplayName = $displayName
+                        SqlFilePath = $sqlFile.FullName
+                        DefaultLakehouseName = $lakehouseName
+                    }
+                
+                    $ellie_notebook_script = "$(Build.SourcesDirectory)/DevOpsServices/pipelines/scripts/New-FabricEllieNotebook.ps1" 
+                    $ellie_notebook_id = & $ellie_notebook_script @params
+                    $ellie_notebooks += $ellie_notebook_id
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Failed to create/update notebook: $displayName"
+                    }
+                
+                    Write-Host "##[section] Notebook $displayName processed successfully"
+                    Write-Host "##[endgroup]"
+                }
+                # skip if $ellie_notebooks is empty
+                if ($ellie_notebooks.Count -eq 0) {
+                    Write-Host "##[warning]No Ellie notebooks were processed."
+                    exit 0
+                }
+                $ellie_notebooks_json = $ellie_notebooks | ConvertTo-Json -Depth 5 -Compress
+                # Debug log the notebook IDs
+                Write-Host "##[debug]Ellie Notebook IDs: $ellie_notebooks_json"
+
+                # Export ELLIE_NOTEBOOK_IDS variable
+                Write-Host "##vso[task.setvariable variable=ELLIE_NOTEBOOK_IDS]$ellie_notebooks_json"
+                Write-Host ""
+                Write-Host "##[section] All Ellie notebooks processed successfully"
+            
+            } catch {
+                Write-Host "##vso[task.LogIssue type=error;]Error: $($_.Exception.Message)"
+                exit 1
+            }
+ 
+      displayName: 'Create Ellie SQL Notebooks'
+      env:
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateSemanticModelsAndReports'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'), eq(variables['isUpdateSparkEnvironment'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          $WorkspaceName = $env:TF_VAR_workspace_names
+          $WorkspaceName = $WorkspaceName.Replace('[', '["').Replace(']', '"]').Replace(',', '","') -replace '"\s+', '"'
+
+          $WorkspaceName = $WorkspaceName.Trim('[', ']').Trim('"')
+          $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Fabric-FolderSynchronization.ps1"
+          $folderHierarchyJson = & $scriptPath -WorkspaceName "$WorkspaceName"
+
+          # display folder hierarchy for debugging
+          Write-Host "##[debug]Folder Hierarchy: $folderHierarchyJson"
+
+          Write-Host "##vso[task.setvariable variable=FOLDER_HIERARCHY]$folderHierarchyJson"
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+      displayName: 'Fabric Folder Synchronization'  
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateSparkEnvironment'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              Write-Host "##[section]Creating Fabric Environment"
+             
+              # Parse workspace configuration
+              $WorkspaceName = $env:TF_VAR_workspace_names
+              $WorkspaceName = $WorkspaceName.Replace('[', '["').Replace(']', '"]').Replace(',', '","') -replace '"\s+', '"'
+              $WorkspaceName = $WorkspaceName.Trim('[', ']').Trim('"')
+             
+              # Get workspace ID from previous step
+              $WorkspaceId = $env:WORKSPACE_ID
+             
+              # Parse spark compute settings
+              $sparkComputeJson = $env:FABRIC_SPARK_COMPUTE
+              Write-Host "##[debug]Spark Compute JSON: $sparkComputeJson"
+             
+              if ([string]::IsNullOrEmpty($sparkComputeJson) -or $sparkComputeJson -eq '{}') {
+                  Write-Host "##[warning]No spark compute configuration found, skipping environment creation"
+                  Write-Host "##vso[task.setvariable variable=ENVIRONMENT_ID]"
+                  Write-Host "##vso[task.setvariable variable=MAIN_ENVIRONMENT_MAPPING]{}"
+                  return
+              }
+             
+              $sparkSettings = ConvertFrom-Json $sparkComputeJson
+              Write-Host "##[debug]Parsed Spark Settings: $($sparkSettings | ConvertTo-Json -Depth 3)"
+             
+              # Find environment platform file
+              $srcFabricPath = "$(System.DefaultWorkingDirectory)/src/fabric"
+              $platformFiles = Get-ChildItem -Path $srcFabricPath -Recurse -Filter ".platform" | Where-Object {
+                  $_.Directory.Name -like "*den_env_pdi_001_spark_runtime_environment.Environment*"
+              }
+             
+              if ($platformFiles.Count -eq 0) {
+                  Write-Host "##[warning]No environment platform file found, skipping environment creation"
+                  Write-Host "##vso[task.setvariable variable=ENVIRONMENT_ID]"
+                  Write-Host "##vso[task.setvariable variable=MAIN_ENVIRONMENT_MAPPING]{}"
+                  return
+              }
+             
+              # Read platform file
+              $platformFile = $platformFiles[0]
+              $platformContent = Get-Content $platformFile.FullName -Raw | ConvertFrom-Json
+              $environmentDisplayName = $platformContent.metadata.displayName
+              $environmentLogicalId = $platformContent.config.logicalId
+              $fullPath = $platformFile.Directory.FullName
+              $folderPath = $fullPath -replace '.*src[/\\]fabric[/\\]', ''
+
+              Write-Host "##[debug]Environment Display Name: $environmentDisplayName"
+              Write-Host "##[debug]Environment Logical ID: $environmentLogicalId"
+              Write-Host "##[debug]Folder Path: $folderPath"
+             
+              # Create environment using PowerShell script
+              $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Invoke-EnvironmentManagement.ps1"
+              $folderHierarchy = if ([string]::IsNullOrEmpty($env:FOLDER_HIERARCHY)) { $null } else { $env:FOLDER_HIERARCHY }
+             
+              $environmentResult = & $scriptPath -Action 'CreateOrUpdate' -WorkspaceId $WorkspaceId -DisplayName $environmentDisplayName -FolderHierarchy $folderHierarchy -FolderPath $folderPath
+
+              if ($environmentResult) {
+
+                  # Handle different result structures
+                  $firstResult = $null
+
+                  if ($environmentResult -is [array]) {
+                      $firstResult = $environmentResult[0]
+                  } else {
+                      $firstResult = $environmentResult
+                  }
+
+                  Write-Host "##[debug]Environment Creation Result: $($firstResult | ConvertTo-Json -Depth 10 -Compress)"
+
+                  try {
+                      $parsedResult = $null
+                    
+                      # Try to parse as JSON if it's a string
+                      if ($firstResult -is [string]) {
+                          $parsedResult = $firstResult | ConvertFrom-Json
+                      }
+                      # If it's already an object, use it directly
+                      elseif ($firstResult -is [PSCustomObject]) {
+                          $parsedResult = $firstResult
+                      }
+                      else {
+                          throw "Unable to parse result: unexpected type $($firstResult.GetType().FullName)"
+                      }
+                    
+                      # Now handle the parsed result structure
+                      if ($parsedResult.PSObject.Properties['value'] -and $parsedResult.value -is [array]) {
+                          Write-Host "##[debug]Result contains 'value' array with $($parsedResult.value.Count) items"
+
+                          # Find the Environment item
+                          $environmentItem =  $parsedResult.value | Where-Object { $_.id } | Select-Object -First 1
+
+                          if ($environmentItem) {
+                              $environmentId = $environmentItem.id.Trim()
+                              Write-Host "##[debug]Extracted Environment ID: $environmentId"
+                          } else {
+                              throw "No Environment item found in result array"
+                          }
+                      }
+                      # Handle direct object result
+                      elseif ($parsedResult.PSObject.Properties['id']) {
+                          $environmentId = $parsedResult.id.Trim()
+                          Write-Host "##[debug]Extracted Environment ID from direct result: $environmentId"
+                      }
+                      else {
+                          throw "Unable to extract ID from result structure"
+                      }
+                    
+                  }
+                  catch {
+                      Write-Host "##[error]Error extracting environment ID: $($_.Exception.Message)"
+                      Write-Host "##[debug]Raw firstResult type: $($firstResult.GetType().FullName)"
+                      Write-Host "##[debug]Raw firstResult content: $firstResult"
+                    
+                      # Additional debugging for PSCustomObject
+                      if ($firstResult -is [PSCustomObject]) {
+                          Write-Host "##[debug]PSCustomObject properties:"
+                          $firstResult.PSObject.Properties | ForEach-Object {
+                              Write-Host "##[debug]  - $($_.Name): $($_.Value)"
+                          }
+                        
+                          if ($firstResult.PSObject.Properties['value']) {
+                              Write-Host "##[debug]Value property type: $($firstResult.value.GetType().FullName)"
+                              if ($firstResult.value -is [array]) {
+                                  Write-Host "##[debug]Value array contents:"
+                                  for ($i = 0; $i -lt $firstResult.value.Count; $i++) {
+                                      Write-Host "##[debug]  [$i]: $($firstResult.value[$i] | ConvertTo-Json -Compress)"
+                                  }
+                              }
+                          }
+                      }
+
+                      throw "Failed to extract environment ID from creation result"
+                  }
+
+                  # Create logical ID to environment ID mapping
+                  $mainEnvironmentMapping = @{
+                      $environmentLogicalId = $environmentId
+                  }
+                  $mainEnvironmentMappingJson = $mainEnvironmentMapping | ConvertTo-Json -Compress
+                 
+                  Write-Host "##[debug]Environment created successfully with ID: $environmentId"
+                  Write-Host "##[debug]Main Environment Mapping: LogicalId=$environmentLogicalId -> EnvironmentId=$environmentId"
+                 
+                  # Set pipeline variables
+                  Write-Host "##vso[task.setvariable variable=ENVIRONMENT_ID]$environmentId"
+                  Write-Host "##vso[task.setvariable variable=MAIN_ENVIRONMENT_MAPPING]$mainEnvironmentMappingJson"
+                 
+                  # Configure Spark settings for the environment
+                  Write-Host "##[section]Configuring Spark Environment Settings"
+                 
+                  $sparkScriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Invoke-SparkEnvironmentSettings.ps1"
+                 
+                  & $sparkScriptPath -WorkspaceId $WorkspaceId -EnvironmentName $environmentDisplayName -DriverCores $sparkSettings.driver_cores -DriverMemory $sparkSettings.driver_memory -ExecutorCores $sparkSettings.executor_cores -ExecutorMemory $sparkSettings.executor_memory -RuntimeVersion $sparkSettings.runtime_version -MinExecutors $sparkSettings.min_executors -MaxExecutors $sparkSettings.max_executors
+                 
+                  Write-Host "##[section]Spark settings configured successfully"
+              } else {
+                  Write-Host "##vso[task.LogIssue type=error;]Failed to create environment"
+                  Write-Host "##vso[task.complete result=Failed;]"
+                  exit 1
+              }
+             
+          } catch {
+              Write-Host "##vso[task.LogIssue type=error;]Error creating environment: $($_.Exception.Message)"
+              Write-Host "##vso[task.LogIssue type=error;]Stack Trace: $($_.ScriptStackTrace)"
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+          }
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+      displayName: 'Create Fabric Environment and Configure Spark Settings'
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateSparkEnvironment'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              Write-Host "##[section]Creating Fabric Subdomain Environments"
+             
+              # Parse workspace configuration
+              $WorkspaceName = $env:TF_VAR_workspace_names
+              $WorkspaceName = $WorkspaceName.Replace('[', '["').Replace(']', '"]').Replace(',', '","') -replace '"\s+', '"'
+              $WorkspaceName = $WorkspaceName.Trim('[', ']').Trim('"')
+             
+              # Get workspace ID from previous step
+              $WorkspaceId = $env:WORKSPACE_ID
+             
+              # Parse spark compute settings
+              $sparkComputeJson = $env:FABRIC_SPARK_COMPUTE
+              Write-Host "##[debug]Spark Compute JSON: $sparkComputeJson"
+             
+              if ([string]::IsNullOrEmpty($sparkComputeJson) -or $sparkComputeJson -eq '{}') {
+                  Write-Host "##[warning]No spark compute configuration found, skipping subdomain environment creation"
+                  Write-Host "##vso[task.setvariable variable=SUBDOMAIN_ENVIRONMENT_MAPPING]{}"
+                  return
+              }
+             
+              $sparkSettings = ConvertFrom-Json $sparkComputeJson
+              Write-Host "##[debug]Parsed Spark Settings: $($sparkSettings | ConvertTo-Json -Depth 3)"
+             
+              # Find subdomain environment platform files (excluding main runtime environment)
+              $srcFabricPath = "$(System.DefaultWorkingDirectory)/src/fabric"
+              $platformFiles = Get-ChildItem -Path $srcFabricPath -Recurse -Filter ".platform" | Where-Object {
+                  $_.Directory.Name -like "*.Environment" -and
+                  $_.Directory.Name -notlike "*den_env_pdi_001_spark_runtime_environment.Environment*"
+              }
+             
+              if ($platformFiles.Count -eq 0) {
+                  Write-Host "##[warning]No subdomain environment platform files found, skipping subdomain environment creation"
+                  Write-Host "##vso[task.setvariable variable=SUBDOMAIN_ENVIRONMENT_MAPPING]{}"
+                  return
+              }
+             
+              Write-Host "##[debug]Found $($platformFiles.Count) subdomain environment platform files"
+             
+              # Create environments for each platform file found
+              $createdEnvironments = @()
+              $subdomainEnvironmentMapping = @{}
+             
+              foreach ($platformFile in $platformFiles) {
+                  try {
+                      # Read platform file
+                      $platformContent = Get-Content $platformFile.FullName -Raw | ConvertFrom-Json
+                      $environmentDisplayName = $platformContent.metadata.displayName
+                      $environmentLogicalId = $platformContent.config.logicalId
+                      $fullPath = $platformFile.Directory.FullName
+                      $folderPath = $fullPath -replace '.*src[/\\]fabric[/\\]', ''
+
+                      Write-Host "##[debug]Processing Subdomain Environment:"
+                      Write-Host "##[debug]  Display Name: $environmentDisplayName"
+                      Write-Host "##[debug]  Logical ID: $environmentLogicalId"
+                      Write-Host "##[debug]  Folder Path: $folderPath"
+                     
+                      # Create environment using PowerShell script
+                      $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Invoke-EnvironmentManagement.ps1"
+                      $folderHierarchy = if ([string]::IsNullOrEmpty($env:FOLDER_HIERARCHY)) { $null } else { $env:FOLDER_HIERARCHY }
+                     
+                      $environmentResult = & $scriptPath -Action 'CreateOrUpdate' -WorkspaceId $WorkspaceId -DisplayName $environmentDisplayName -FolderHierarchy $folderHierarchy -FolderPath $folderPath
+                     
+                      if ($environmentResult) {
+                          # Handle different result structures
+                          $firstResult = $null
+                        
+                          if ($environmentResult -is [array]) {
+                              $firstResult = $environmentResult[0]
+                          } else {
+                              $firstResult = $environmentResult
+                          }
+                        
+                          Write-Host "##[debug]Environment Creation Result: $($firstResult | ConvertTo-Json -Depth 10 -Compress)"
+
+                          try {
+                              $parsedResult = $null
+                            
+                              # Try to parse as JSON if it's a string
+                              if ($firstResult -is [string]) {
+                                  $parsedResult = $firstResult | ConvertFrom-Json
+                              }
+                              # If it's already an object, use it directly
+                              elseif ($firstResult -is [PSCustomObject]) {
+                                  $parsedResult = $firstResult
+                              }
+                              else {
+                                  throw "Unable to parse result: unexpected type $($firstResult.GetType().FullName)"
+                              }
+                            
+                              # Now handle the parsed result structure
+                              if ($parsedResult.PSObject.Properties['value'] -and $parsedResult.value -is [array]) {
+                                  Write-Host "##[debug]Result contains 'value' array with $($parsedResult.value.Count) items"
+
+                                  # Find the Environment item
+                                  $environmentItem =  $parsedResult.value | Where-Object { $_.id } | Select-Object -First 1
+
+                                  if ($environmentItem) {
+                                      $environmentId = $environmentItem.id.Trim()
+                                      Write-Host "##[debug]Extracted Environment ID: $environmentId"
+                                  } else {
+                                      throw "No Environment item found in result array"
+                                  }
+                              }
+                              # Handle direct object result
+                              elseif ($parsedResult.PSObject.Properties['id']) {
+                                  $environmentId = $parsedResult.id.Trim()
+                                  Write-Host "##[debug]Extracted Environment ID from direct result: $environmentId"
+                              }
+                              else {
+                                  throw "Unable to extract ID from result structure"
+                              }
+                            
+                          }
+                          catch {
+                              Write-Host "##[error]Error extracting environment ID: $($_.Exception.Message)"
+                              Write-Host "##[debug]Raw firstResult type: $($firstResult.GetType().FullName)"
+                              Write-Host "##[debug]Raw firstResult content: $firstResult"
+                            
+                              # Additional debugging for PSCustomObject
+                              if ($firstResult -is [PSCustomObject]) {
+                                  Write-Host "##[debug]PSCustomObject properties:"
+                                  $firstResult.PSObject.Properties | ForEach-Object {
+                                      Write-Host "##[debug]  - $($_.Name): $($_.Value)"
+                                  }
+                                
+                                  if ($firstResult.PSObject.Properties['value']) {
+                                      Write-Host "##[debug]Value property type: $($firstResult.value.GetType().FullName)"
+                                      if ($firstResult.value -is [array]) {
+                                          Write-Host "##[debug]Value array contents:"
+                                          for ($i = 0; $i -lt $firstResult.value.Count; $i++) {
+                                              Write-Host "##[debug]  [$i]: $($firstResult.value[$i] | ConvertTo-Json -Compress)"
+                                          }
+                                      }
+                                  }
+                              }
+
+                              throw "Failed to extract environment ID from creation result"
+                          }
+
+                         
+                          # Add to logical ID mapping
+                          $subdomainEnvironmentMapping[$environmentLogicalId] = $environmentId
+                         
+                          Write-Host "##[debug]Subdomain Environment '$environmentDisplayName' created successfully with ID: $environmentId"
+                          Write-Host "##[debug]Subdomain Environment Mapping: LogicalId=$environmentLogicalId -> EnvironmentId=$environmentId"
+                         
+                          # Store environment info for spark configuration
+                          $createdEnvironments += @{
+                              DisplayName = $environmentDisplayName
+                              EnvironmentId = $environmentId
+                              LogicalId = $environmentLogicalId
+                              WorkspaceId = $WorkspaceId
+                          }
+                         
+                      } else {
+                          Write-Host "##vso[task.LogIssue type=warning;]Failed to create subdomain environment: $environmentDisplayName"
+                      }
+                     
+                  } catch {
+                      Write-Host "##vso[task.LogIssue type=error;]Error processing subdomain environment '$($platformFile.Name)': $($_.Exception.Message)"
+                      Write-Host "##[debug]Stack Trace: $($_.ScriptStackTrace)"
+                      continue
+                  }
+              }
+             
+              # Export subdomain environment mapping as JSON
+              $subdomainEnvironmentMappingJson = $subdomainEnvironmentMapping | ConvertTo-Json -Compress
+              Write-Host "##[debug]Subdomain Environment Mappings: $subdomainEnvironmentMappingJson"
+              Write-Host "##vso[task.setvariable variable=SUBDOMAIN_ENVIRONMENT_MAPPING]$subdomainEnvironmentMappingJson"
+             
+              # Configure Spark settings for all created subdomain environments
+              if ($createdEnvironments.Count -gt 0) {
+                  Write-Host "##[section]Configuring Spark Settings for Subdomain Environments"
+                 
+                  $sparkScriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Invoke-SparkEnvironmentSettings.ps1"
+                 
+                  foreach ($env in $createdEnvironments) {
+                      try {
+                          Write-Host "##[debug]Configuring Spark settings for: $($env.DisplayName)"
+                         
+                          & $sparkScriptPath -WorkspaceId $env.WorkspaceId -EnvironmentName $env.DisplayName -DriverCores $sparkSettings.driver_cores -DriverMemory $sparkSettings.driver_memory -ExecutorCores $sparkSettings.executor_cores -ExecutorMemory $sparkSettings.executor_memory -RuntimeVersion $sparkSettings.runtime_version -MinExecutors $sparkSettings.min_executors -MaxExecutors $sparkSettings.max_executors
+                         
+                          Write-Host "##[debug]Spark settings configured successfully for: $($env.DisplayName)"
+                      } catch {
+                          Write-Host "##vso[task.LogIssue type=warning;]Failed to configure Spark settings for '$($env.DisplayName)': $($_.Exception.Message)"
+                          continue
+                      }
+                  }
+                 
+                  Write-Host "##[section]Subdomain Environment Spark settings configuration completed"
+              }
+             
+              Write-Host "##[section]Subdomain Environment creation process completed. Created $($createdEnvironments.Count) environments."
+             
+          } catch {
+              Write-Host "##vso[task.LogIssue type=error;]Error creating subdomain environments: $($_.Exception.Message)"
+              Write-Host "##vso[task.LogIssue type=error;]Stack Trace: $($_.ScriptStackTrace)"
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+          }
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+      displayName: 'Create Fabric Subdomain Environments and Configure Spark Settings'
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateSparkEnvironment'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+            try {
+                
+          
+                Write-Host "##[section]Update Fabric Spark Settings"
+                $default_spark_environment_name = $env:TF_VAR_default_spark_environment_name
+
+                $default_spark_runtime = $env:TF_VAR_default_spark_runtime
+            
+                # Check if Fabric connections script exists
+                $fabricUpdateSparkSettingsScriptPath = "$(Build.SourcesDirectory)/DevOpsServices/Pipelines/scripts/Update-FabricSparkSettings.ps1"
+                
+                if (-not (Test-Path $fabricUpdateSparkSettingsScriptPath)) {
+                    Write-Host "##vso[task.LogIssue type=warning;]Fabric spark settings script not found at: $fabricUpdateSparkSettingsScriptPath"
+                    Write-Host "##[debug]Skipping fabric spark settings update"
+                }
+                else {
+                    Write-Host "##[debug]Executing fabric spark settings script"
+                    
+                    # Execute fabric connections script
+                    try {
+                        Write-Host "##[command]Executing: Update-FabricSparkSettings.ps1"
+                        
+                        & $fabricUpdateSparkSettingsScriptPath -WorkspaceId "$env:WORKSPACE_ID" -EnvironmentName $default_spark_environment_name -RuntimeVersion $default_spark_runtime
+                        
+                        if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
+                            Write-Host "##[section] Fabric spark settings updated successfully" -ForegroundColor Green
+                        }
+                        else {
+                            Write-Host "##vso[task.LogIssue type=error;]Fabric spark settings script failed with exit code: $LASTEXITCODE"
+                            throw "Fabric spark settings update failed"
+                        }
+                    }
+                    catch {
+                        Write-Host "##vso[task.LogIssue type=error;]Failed to update fabric spark settings: $($_.Exception.Message)"
+                        exit 1
+                    }
+                }
+            }
+            catch {
+                Write-Host "##vso[task.LogIssue type=error;]Unexpected error during fabric spark settings update: $($_.Exception.Message)"
+                exit 1
+            }
+
+      displayName: 'Update Fabric Spark Settings'
+      env:
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              Write-Host "##[section]Creating Fabric Lakehouses"
+             
+              # Parse workspace configuration
+              $WorkspaceName = $env:TF_VAR_workspace_names
+              $WorkspaceName = $WorkspaceName.Replace('[', '["').Replace(']', '"]').Replace(',', '","') -replace '"\s+', '"'
+              $WorkspaceName = $WorkspaceName.Trim('[', ']').Trim('"')
+             
+              # Get workspace ID from previous step
+              $WorkspaceId = $env:WORKSPACE_ID
+             
+              # Find lakehouse platform files (excluding filtered ones)
+              $srcFabricPath = "$(System.DefaultWorkingDirectory)/src/fabric"
+              $platformFiles = Get-ChildItem -Path $srcFabricPath -Recurse -Filter ".platform" | Where-Object {
+                  $_.Directory.Name -like "*.Lakehouse" -and
+                  $_.Directory.Name -notlike "*den_lhw_pdi_001_curated.Lakehouse*" -and
+                  $_.Directory.Name -notlike "*den_lhw_pdi_001_raw.Lakehouse*"
+              }
+             
+              if ($platformFiles.Count -eq 0) {
+                  Write-Host "##[warning]No lakehouse platform files found, skipping lakehouse creation"
+                  return
+              }
+             
+              Write-Host "##[debug]Found $($platformFiles.Count) lakehouse platform files"
+             
+              # Create lakehouses for each platform file found
+              $createdLakehouses = @()
+             
+              foreach ($platformFile in $platformFiles) {
+                  try {
+                      # Read platform file
+                      $platformContent = Get-Content $platformFile.FullName -Raw | ConvertFrom-Json
+                      $lakehouseDisplayName = $platformContent.metadata.displayName
+                      $fullPath = $platformFile.Directory.FullName
+                      $folderPath = $fullPath -replace '.*src[/\\]fabric[/\\]', ''
+
+                      Write-Host "##[debug]Processing Lakehouse:"
+                      Write-Host "##[debug]  Display Name: $lakehouseDisplayName"
+                      Write-Host "##[debug]  Folder Path: $folderPath"
+                     
+                      # Create lakehouse using PowerShell script
+                      $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Invoke-LakehouseManagement.ps1"
+                      $folderHierarchy = if ([string]::IsNullOrEmpty($env:FOLDER_HIERARCHY)) { $null } else { $env:FOLDER_HIERARCHY }
+                     
+                      $lakehouseResult = & $scriptPath -Action 'CreateOrUpdate' -WorkspaceId $WorkspaceId -DisplayName $lakehouseDisplayName -FolderHierarchy $folderHierarchy -FolderPath $folderPath
+                     
+                      if ($lakehouseResult) {
+                          # Handle different result structures
+                          $firstResult = $null
+                        
+                          if ($lakehouseResult -is [array]) {
+                              $firstResult = $lakehouseResult[0]
+                          } else {
+                              $firstResult = $lakehouseResult
+                          }
+                          
+                          Write-Host "##[debug]Lakehouse Creation Result: $($firstResult | ConvertTo-Json -Depth 10 -Compress)"
+   
+                          try {
+                              $parsedResult = $null
+                            
+                              # Try to parse as JSON if it's a string
+                              if ($firstResult -is [string]) {
+                                  $parsedResult = $firstResult | ConvertFrom-Json
+                              }
+                              # If it's already an object, use it directly
+                              elseif ($firstResult -is [PSCustomObject]) {
+                                  $parsedResult = $firstResult
+                              }
+                              else {
+                                  throw "Unable to parse result: unexpected type $($firstResult.GetType().FullName)"
+                              }
+                            
+                              # Now handle the parsed result structure
+                              if ($parsedResult.PSObject.Properties['value'] -and $parsedResult.value -is [array]) {
+                                  Write-Host "##[debug]Result contains 'value' array with $($parsedResult.value.Count) items"
+                                
+                                  # Find the Lakehouse item
+                                  $lakehouseItem =  $parsedResult.value | Where-Object { $_.id } | Select-Object -First 1
+                                
+                                  if ($lakehouseItem) {
+                                      $lakehouseId = $lakehouseItem.id.Trim()
+                                      Write-Host "##[debug]Extracted Lakehouse ID: $lakehouseId"
+                                  } else {
+                                      throw "No Lakehouse item found in result array"
+                                  }
+                              }
+                              # Handle direct object result
+                              elseif ($parsedResult.PSObject.Properties['id']) {
+                                  $lakehouseId = $parsedResult.id.Trim()
+                                  Write-Host "##[debug]Extracted Lakehouse ID from direct result: $lakehouseId"
+                              }
+                              else {
+                                  throw "Unable to extract ID from result structure"
+                              }
+                            
+                          }
+                          catch {
+                              Write-Host "##[error]Error extracting lakehouse ID: $($_.Exception.Message)"
+                              Write-Host "##[debug]Raw firstResult type: $($firstResult.GetType().FullName)"
+                              Write-Host "##[debug]Raw firstResult content: $firstResult"
+                            
+                              # Additional debugging for PSCustomObject
+                              if ($firstResult -is [PSCustomObject]) {
+                                  Write-Host "##[debug]PSCustomObject properties:"
+                                  $firstResult.PSObject.Properties | ForEach-Object {
+                                      Write-Host "##[debug]  - $($_.Name): $($_.Value)"
+                                  }
+                                
+                                  if ($firstResult.PSObject.Properties['value']) {
+                                      Write-Host "##[debug]Value property type: $($firstResult.value.GetType().FullName)"
+                                      if ($firstResult.value -is [array]) {
+                                          Write-Host "##[debug]Value array contents:"
+                                          for ($i = 0; $i -lt $firstResult.value.Count; $i++) {
+                                              Write-Host "##[debug]  [$i]: $($firstResult.value[$i] | ConvertTo-Json -Compress)"
+                                          }
+                                      }
+                                  }
+                              }
+                            
+                              throw "Failed to extract lakehouse ID from creation result"
+                          }
+                                                
+                          # Create the key for file naming
+                          $fileKey = "${WorkspaceName}-${lakehouseDisplayName}"
+                          $safeFileKey = $fileKey.Replace("-", "_").Replace(" ", "_").Replace("/", "_")
+                         
+                          # Create .terraform directory if it doesn't exist
+                          $terraformDir = "$(workingDirectory)/.terraform"
+                          if (!(Test-Path $terraformDir)) {
+                              New-Item -ItemType Directory -Path $terraformDir -Force
+                          }
+                         
+                          # Save lakehouse ID to file
+                          $lakehouseIdFile = "$terraformDir/lakehouse_${safeFileKey}_id.txt"
+                          Set-Content -Path $lakehouseIdFile -Value $lakehouseId -NoNewline -Force
+                         
+                          Write-Host "##[debug]Lakehouse '$lakehouseDisplayName' created successfully with ID: $lakehouseId"
+                          Write-Host "##[debug]Lakehouse ID saved to: $lakehouseIdFile"
+                         
+                          # Store lakehouse info for downstream processes
+                          $createdLakehouses += @{
+                              DisplayName = $lakehouseDisplayName
+                              LakehouseId = $lakehouseId
+                              WorkspaceId = $WorkspaceId
+                              FolderPath = $folderPath
+                              FileKey = $safeFileKey
+                          }
+                         
+                      } else {
+                          Write-Host "##vso[task.LogIssue type=warning;]Failed to create lakehouse: $lakehouseDisplayName"
+                      }
+                     
+                  } catch {
+                      Write-Host "##vso[task.LogIssue type=error;]Error processing lakehouse $($platformFile.Name) : $($_.Exception.Message)"
+                      Write-Host "##[debug]Stack Trace: $($_.ScriptStackTrace)"
+                      continue
+                  }
+              }
+             
+              Write-Host "##[debug]Lakehouse creation process completed. Created $($createdLakehouses.Count) lakehouses."
+             
+              # Create a summary of created lakehouses for pipeline variables
+              if ($createdLakehouses.Count -gt 0) {
+                  $lakehouseSummary = $createdLakehouses | ConvertTo-Json -Compress
+                  Write-Host "##[debug]Created Lakehouses Summary: $lakehouseSummary"
+                  Write-Host "##vso[task.setvariable variable=CREATED_LAKEHOUSES]$lakehouseSummary"
+                 
+                  # Create a comma-separated list of lakehouse names for shortcuts processing
+                  $lakehouseNames = ($createdLakehouses | ForEach-Object { $_.DisplayName }) -join ", "
+                  Write-Host "##vso[task.setvariable variable=LAKEHOUSE_NAMES]$lakehouseNames"
+              } else {
+                  Write-Host "##vso[task.setvariable variable=CREATED_LAKEHOUSES][]"
+                  Write-Host "##vso[task.setvariable variable=LAKEHOUSE_NAMES]"
+              }
+             
+          } catch {
+              Write-Host "##vso[task.LogIssue type=error;]Error creating lakehouses: $($_.Exception.Message)"
+              Write-Host "##vso[task.LogIssue type=error;]Stack Trace: $($_.ScriptStackTrace)"
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+          }
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+      displayName: 'Create Fabric Lakehouses'
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+            Write-Host "##[section]Creating Fabric Lakehouse Shortcuts"
+            $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Deploy-LakehouseShortcuts.ps1"        
+            $WorkspaceIds = $env:WORKSPACE_IDS | ConvertFrom-Json
+            $workspaceName = $workspaceIds.PSObject.Properties.Name
+       
+            $lakehouseShortcutsResult = & $scriptPath -WorkspaceName $workspaceName -ShortcutsJson $env:FABRIC_SHORTCUTS_DETAILED 
+            
+            if ($LASTEXITCODE -eq 0 -or $null -eq $LASTEXITCODE) {
+                Write-Host "##[section]✓ Shortcuts created successfully" -ForegroundColor Green
+            }
+            else {
+                Write-Host "##vso[task.LogIssue type=error;]Shortcuts script failed with exit code: $LASTEXITCODE"
+                throw "Shortcuts script failed"
+            }                     
+          } catch {
+              Write-Host "##vso[task.LogIssue type=error;]Error creating ##[section]Creating Fabric Lakehouse Shortcuts: $($_.Exception.Message)"
+              Write-Host "##vso[task.LogIssue type=error;]Stack Trace: $($_.ScriptStackTrace)"
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+          }
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+      displayName: 'Create Fabric Lakehouse Shortcuts'
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              Write-Host "##[section]Creating and Updating Fabric Notebooks"
+             
+              # Parse workspace configuration
+              $WorkspaceName = $env:TF_VAR_workspace_names
+              $WorkspaceName = $WorkspaceName.Replace('[', '["').Replace(']', '"]').Replace(',', '","') -replace '"\s+', '"'
+              $WorkspaceName = $WorkspaceName.Trim('[', ']').Trim('"')
+             
+              # Get workspace ID and main environment ID from previous steps
+              # ENVIRONMENT_ID comes from the main Python runtime environment created earlier
+              $WorkspaceId = $env:WORKSPACE_ID
+              $MainEnvironmentId = $env:ENVIRONMENT_ID  # This is the Python runtime environment
+             
+              # Parse environment mappings from previous steps
+              $mainEnvironmentMapping = @{}
+              $subdomainEnvironmentMapping = @{}
+             
+              if (![string]::IsNullOrEmpty($env:MAIN_ENVIRONMENT_MAPPING) -and $env:MAIN_ENVIRONMENT_MAPPING -ne '{}') {
+                  $mainEnvironmentMapping = ConvertFrom-Json $env:MAIN_ENVIRONMENT_MAPPING
+                  Write-Host "##[debug]Main Environment Mapping loaded: $($mainEnvironmentMapping | ConvertTo-Json -Compress)"
+              }
+             
+              if (![string]::IsNullOrEmpty($env:SUBDOMAIN_ENVIRONMENT_MAPPING) -and $env:SUBDOMAIN_ENVIRONMENT_MAPPING -ne '{}') {
+                  $subdomainEnvironmentMapping = ConvertFrom-Json $env:SUBDOMAIN_ENVIRONMENT_MAPPING
+                  Write-Host "##[debug]Subdomain Environment Mapping loaded: $($subdomainEnvironmentMapping | ConvertTo-Json -Compress)"
+              }
+             
+              Write-Host "##[debug]Available Environment Logical IDs:"
+              Write-Host "##[debug]  Main Environment Logical IDs: $($mainEnvironmentMapping.PSObject.Properties.Name -join ', ')"
+              Write-Host "##[debug]  Subdomain Environment Logical IDs: $($subdomainEnvironmentMapping.PSObject.Properties.Name -join ', ')"
+             
+              # Parse created lakehouses for lakehouse ID lookup
+              $createdLakehouses = @{}
+              if (![string]::IsNullOrEmpty($env:CREATED_LAKEHOUSES) -and $env:CREATED_LAKEHOUSES -ne '[]') {
+                  $lakehouseArray = ConvertFrom-Json $env:CREATED_LAKEHOUSES
+                  foreach ($lh in $lakehouseArray) {
+                      $createdLakehouses[$lh.DisplayName] = $lh.LakehouseId
+                  }
+              }
+              Write-Host "##[debug]Available Lakehouses: $($createdLakehouses.Keys -join ', ')"
+             
+              # Build Ellie platform files list (equivalent to local.ellie_platform_files)
+              $excludedNotebooks = @()
+              $elliePlatformFiles = @()
+             
+              $ellieBasePath = "$(System.DefaultWorkingDirectory)/src/ellie"
+              if (Test-Path $ellieBasePath) {
+                  Write-Host "##[debug]Checking for Ellie platform files in: $ellieBasePath"
+                 
+                  $elliePlatformFilesList = Get-ChildItem -Path $ellieBasePath -Recurse -Filter "*.platform" | Where-Object {
+                      $_.Directory.Name -like "*.Notebook"
+                  }
+                 
+                  foreach ($platformFile in $elliePlatformFilesList) {
+                      try {
+                          $platformContent = Get-Content $platformFile.FullName -Raw | ConvertFrom-Json
+                          $displayName = $platformContent.metadata.displayName
+                          $excludeEntry = "${displayName}.Notebook"
+                          $elliePlatformFiles += $excludeEntry
+                          Write-Host "##[debug]Found Ellie platform file: $excludeEntry"
+                      } catch {
+                          Write-Host "##[warning]Could not parse Ellie platform file: $($platformFile.FullName)"
+                          continue
+                      }
+                  }
+              }
+             
+              $excludedNotebooks = $elliePlatformFiles
+              Write-Host "##[debug]Excluded Notebooks (from Ellie): $($excludedNotebooks -join ', ')"
+             
+              # Find notebook platform files (excluding filtered ones)
+              $srcFabricPath = "$(System.DefaultWorkingDirectory)/src/fabric"
+              $platformFiles = Get-ChildItem -Path $srcFabricPath -Recurse -Filter ".platform" | Where-Object {
+                  $_.Directory.Name -like "*.Notebook" -and
+                  $excludedNotebooks -notcontains $_.Directory.Parent.Name
+              }
+             
+              if ($platformFiles.Count -eq 0) {
+                  Write-Host "##[warning]No notebook platform files found, skipping notebook creation"
+                  return
+              }
+             
+              Write-Host "##[debug]Found $($platformFiles.Count) notebook platform files"
+             
+              # Process notebooks in two phases: 1) Update dependencies, 2) Create/Update notebooks
+              $notebookConfigs = @()
+             
+              # Phase 1: Collect and process notebook configurations
+              foreach ($platformFile in $platformFiles) {
+                  try {
+                      # Read platform file
+                      $platformContent = Get-Content $platformFile.FullName -Raw | ConvertFrom-Json
+                      $notebookDisplayName = $platformContent.metadata.displayName
+
+                      $fullPath = $platformFile.Directory.FullName
+                      $folderPath = $fullPath -replace '.*src[/\\]fabric[/\\]', ''
+
+                      $notebookDir = $platformFile.Directory.FullName
+                     
+                      # Find content file (prioritize .py, then .scala, then .sql)
+                      $contentFile = $null
+                      $ipynbFile = Join-Path $notebookDir "notebook-content.ipynb"
+                     
+                      @("notebook-content.py", "notebook-content.scala", "notebook-content.sql") | ForEach-Object {
+                          $testFile = Join-Path $notebookDir $_
+                          if ((Test-Path $testFile) -and ($null -eq $contentFile)) {
+                              $contentFile = $testFile
+                          }
+                      }
+                     
+                      # Default to .py if no content file found
+                      if ($null -eq $contentFile) {
+                          $contentFile = Join-Path $notebookDir "notebook-content.py"
+                      }
+                     
+                      Write-Host "##[debug]Processing Notebook:"
+                      Write-Host "##[debug]  Display Name: $notebookDisplayName"
+                      Write-Host "##[debug]  Folder Path: $folderPath"
+                      Write-Host "##[debug]  Content File: $contentFile"
+                      Write-Host "##[debug]  IPYNB File: $ipynbFile"
+                     
+                      # Extract metadata from notebook content
+                      $lakehouseName = "null"
+                      $environmentId = "null"
+                     
+                      if (Test-Path $contentFile) {
+                          $content = Get-Content $contentFile -Raw
+                         
+                          # Extract lakehouse name
+                          if ($content -match '(?m)^\s*# META\s+"default_lakehouse_name":\s*"([^"]+)"') {
+                              $lakehouseName = $matches[1]
+                          } elseif ($content -match '(?m)^\s*-- META\s+"default_lakehouse_name":\s*"([^"]+)"') {
+                              $lakehouseName = $matches[1]
+                          }
+                         
+                          # Extract environment ID
+                          if ($content -match '(?m)^\s*# META\s+"environmentId":\s*"([^"]+)"') {
+                              $environmentId = $matches[1]
+                          } elseif ($content -match '(?m)^\s*-- META\s+"environmentId":\s*"([^"]+)"') {
+                              $environmentId = $matches[1]
+                          }
+                      }
+                     
+                      # Resolve lakehouse ID
+                      $lakehouseId = $null
+                      if ($lakehouseName -ne "null" -and $createdLakehouses.ContainsKey($lakehouseName)) {
+                          $lakehouseId = $createdLakehouses[$lakehouseName]
+                      }
+                     
+                      if ($environmentId -ne "null") {
+                          # Try to find matching property name in both mappings
+                          $foundMatch = $false
+                        
+                          # First, iterate through main environment mapping property names
+                          if ($mainEnvironmentMapping -and $mainEnvironmentMapping.PSObject.Properties.Count -gt 0) {
+                              foreach ($propertyName in $mainEnvironmentMapping.PSObject.Properties.Name) {
+                                  if ($environmentId -eq $propertyName) {
+                                      $resolvedEnvironmentId = $mainEnvironmentMapping.$propertyName
+                                      $foundMatch = $true
+                                      Write-Host "##[debug]Found match in main environment mapping: Property='$propertyName' -> Value='$resolvedEnvironmentId'"
+                                      break
+                                  }
+                              }
+                          }
+                        
+                          # If not found in main mapping, iterate through subdomain environment mapping property names
+                          if (-not $foundMatch -and $subdomainEnvironmentMapping -and $subdomainEnvironmentMapping.PSObject.Properties.Count -gt 0) {
+                              foreach ($propertyName in $subdomainEnvironmentMapping.PSObject.Properties.Name) {
+                                  if ($environmentId -eq $propertyName) {
+                                      $resolvedEnvironmentId = $subdomainEnvironmentMapping.$propertyName
+                                      $foundMatch = $true
+                                      Write-Host "##[debug]Found match in subdomain environment mapping: Property='$propertyName' -> Value='$resolvedEnvironmentId'"
+                                      break
+                                  }
+                              }
+                          }
+                      }
+                      if ([string]::IsNullOrEmpty($resolvedEnvironmentId)) {
+                          $resolvedEnvironmentId = "00000000-0000-0000-0000-000000000000"
+                      }
+                     
+                      # The EnvironmentIdPython should always be the main Python runtime environment
+                      $environmentIdPython = $env:ENVIRONMENT_ID
+                     
+                      # Store notebook configuration
+                      $notebookConfigs += @{
+                          DisplayName = $notebookDisplayName
+                          FolderPath = $folderPath
+                          ContentFile = $contentFile
+                          IpynbFile = $ipynbFile
+                          PlatformFile = $platformFile.FullName
+                          LakehouseName = $lakehouseName
+                          LakehouseId = $lakehouseId
+                          EnvironmentId = $resolvedEnvironmentId
+                          EnvironmentIdPython = $environmentIdPython
+                          WorkspaceId = $WorkspaceId
+                      }
+                     
+                  } catch {
+                      Write-Host "##vso[task.LogIssue type=error;]Error processing notebook '$($platformFile.Name)': $($_.Exception.Message)"
+                      Write-Host "##[debug]Stack Trace: $($_.ScriptStackTrace)"
+                      continue
+                  }
+              }
+             
+              Write-Host "##[section]Phase 1: Updating Notebook Dependencies"
+             
+              # Phase 1: Update notebook dependencies
+              foreach ($notebook in $notebookConfigs) {
+                  try {
+                      Write-Host "##[debug]Updating dependencies for: $($notebook.DisplayName)"
+                     
+                      $updateScript = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Update-NotebookDependencies.ps1"
+                      $updateParams = @(
+                          "-KeyVaultName", "'$env:TF_VAR_keyvault_name'"
+                          "-WorkspaceId", "'$($notebook.WorkspaceId)'"
+                          "-EnvironmentId", "'$($notebook.EnvironmentId)'"
+                          "-EnvironmentIdPython", "'$($notebook.EnvironmentIdPython)'"
+                          "-NotebookPath", "'$($notebook.ContentFile)'"
+                      )
+                     
+                      if ($notebook.LakehouseName -ne "null" -and $null -ne $notebook.LakehouseId) {
+                          $updateParams += "-LakehouseName", "'$($notebook.LakehouseName)'"
+                          $updateParams += "-LakehouseId", "'$($notebook.LakehouseId)'"
+                      }
+                     
+                      $updateCommand = "& '$updateScript' $($updateParams -join ' ')"
+                      Write-Host "##[debug]Executing: $updateCommand"
+                     
+                      Invoke-Expression $updateCommand
+                     
+                      Write-Host "##[debug]Dependencies updated successfully for: $($notebook.DisplayName)"
+                     
+                  } catch {
+                      Write-Host "##vso[task.LogIssue type=warning;]Failed to update dependencies for '$($notebook.DisplayName)': $($_.Exception.Message)"
+                      continue
+                  }
+              }
+             
+              Write-Host "##[section]Phase 2: Creating/Updating Notebooks"
+             
+              # Phase 2: Create/Update notebooks
+              $createdNotebooks = @()
+             
+              foreach ($notebook in $notebookConfigs) {
+                  try {
+                      Write-Host "##[debug]Creating/Updating notebook: $($notebook.DisplayName)"
+                     
+                      $notebookScript = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Invoke-NotebookManagement.ps1"
+                      $folderHierarchy = if ([string]::IsNullOrEmpty($env:FOLDER_HIERARCHY)) { $null } else { $env:FOLDER_HIERARCHY }
+                     
+                      $notebookParams = @(
+                          "-Action", "'CreateOrUpdate'"
+                          "-WorkspaceId", "'$($notebook.WorkspaceId)'"
+                          "-DisplayName", "'$($notebook.DisplayName)'"
+                          "-IpynbFile", "'$($notebook.IpynbFile)'"
+                          "-PlatformFile", "'$($notebook.PlatformFile)'"
+                      )
+                     
+                      if (![string]::IsNullOrEmpty($folderHierarchy)) {
+                          $notebookParams += "-FolderHierarchy", "'$folderHierarchy'"
+                      }
+                     
+                      if (![string]::IsNullOrEmpty($notebook.FolderPath)) {
+                          $notebookParams += "-FolderPath", "'$($notebook.FolderPath)'"
+                      }
+                     
+                      if ($notebook.EnvironmentId -ne "00000000-0000-0000-0000-000000000000") {
+                          $notebookParams += "-EnvironmentId", "'$($notebook.EnvironmentId)'"
+                      }
+                     
+                      if ($notebook.LakehouseName -ne "null") {
+                          $notebookParams += "-LakehouseName", "'$($notebook.LakehouseName)'"
+                          if ($null -ne $notebook.LakehouseId) {
+                              $notebookParams += "-LakehouseId", "'$($notebook.LakehouseId)'"
+                          }
+                      }
+                     
+                      $notebookCommand = "& '$notebookScript' $($notebookParams -join ' ')"
+                      Write-Host "##[debug]Executing: $notebookCommand"
+                     
+                      $notebookResult = Invoke-Expression $notebookCommand
+                     
+                      if ($notebookResult) {
+                          Write-Host "##[section]Notebook '$($notebook.DisplayName)' created/updated successfully"
+                         
+                          $createdNotebooks += @{
+                              DisplayName = $notebook.DisplayName
+                              WorkspaceId = $notebook.WorkspaceId
+                              FolderPath = $notebook.FolderPath
+                          }
+                      } else {
+                          Write-Host "##vso[task.LogIssue type=warning;]Failed to create/update notebook: $($notebook.DisplayName)"
+                      }
+                     
+                  } catch {
+                      Write-Host "##vso[task.LogIssue type=error;]Error creating/updating notebook '$($notebook.DisplayName)': $($_.Exception.Message)"
+                      Write-Host "##[debug]Stack Trace: $($_.ScriptStackTrace)"
+                      continue
+                  }
+              }
+             
+              Write-Host "##[section]Notebook creation/update process completed. Processed $($createdNotebooks.Count) notebooks."
+             
+              # Create a summary of created notebooks for pipeline variables
+              if ($createdNotebooks.Count -gt 0) {
+                  $notebookSummary = $createdNotebooks | ConvertTo-Json -Compress
+                  Write-Host "##[debug]Created Notebooks Summary: $notebookSummary"
+                  Write-Host "##vso[task.setvariable variable=CREATED_NOTEBOOKS]$notebookSummary"
+              } else {
+                  Write-Host "##vso[task.setvariable variable=CREATED_NOTEBOOKS][]"
+              }
+             
+          } catch {
+              Write-Host "##vso[task.LogIssue type=error;]Error processing notebooks: $($_.Exception.Message)"
+              Write-Host "##vso[task.LogIssue type=error;]Stack Trace: $($_.ScriptStackTrace)"
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+          }
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+      displayName: 'Create and Update Fabric Notebooks'
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+              Write-Host "##[section]Creating Fabric KQL Dashboards"
+             
+              # Parse workspace configuration
+              $WorkspaceName = $env:TF_VAR_workspace_names
+              $WorkspaceName = $WorkspaceName.Replace('[', '["').Replace(']', '"]').Replace(',', '","') -replace '"\s+', '"'
+              $WorkspaceName = $WorkspaceName.Trim('[', ']').Trim('"')
+             
+              # Get workspace ID from previous step
+              $WorkspaceId = $env:WORKSPACE_ID
+             
+              # Find KQL Dashboard platform files
+              $srcFabricPath = "$(System.DefaultWorkingDirectory)/src/fabric"
+              $platformFiles = Get-ChildItem -Path $srcFabricPath -Recurse -Filter ".platform" | Where-Object {
+                  $_.Directory.Name -like "*.KQLDashboard"
+              }
+             
+              if ($platformFiles.Count -eq 0) {
+                  Write-Host "##[warning]No KQL Dashboard platform files found, skipping dashboard creation"
+                  return
+              }
+             
+              Write-Host "##[debug]Found $($platformFiles.Count) KQL Dashboard platform files"
+             
+              # Create dashboards for each platform file found
+              $createdDashboards = @()
+             
+              foreach ($platformFile in $platformFiles) {
+                  try {
+                      # Read platform file
+                      $platformContent = Get-Content $platformFile.FullName -Raw | ConvertFrom-Json
+                      $dashboardDisplayName = $platformContent.metadata.displayName
+                      $dashboardDescription = if ($platformContent.metadata.PSObject.Properties['description']) {
+                          $platformContent.metadata.description
+                      } else {
+                          ""
+                      }
+                     
+                      # Get folder path relative to src/fabric
+                      $fullPath = $platformFile.Directory.FullName
+                      $folderPath = $fullPath -replace '.*src[/\\]fabric[/\\]', ''
+                     
+                      # Look for RealTimeDashboard.json content file
+                      $contentFile = Join-Path $platformFile.Directory.FullName "RealTimeDashboard.json"
+                      $dashboardContent = $null
+                     
+                      if (Test-Path $contentFile) {
+                          $dashboardContent = Get-Content $contentFile -Raw
+                          Write-Host "##[debug]Found dashboard content file: $contentFile"
+                      } else {
+                          Write-Host "##[warning]Dashboard content file not found: $contentFile"
+                      }
+                     
+                      Write-Host "##[debug]Processing KQL Dashboard:"
+                      Write-Host "##[debug]  Display Name: $dashboardDisplayName"
+                      Write-Host "##[debug]  Description: $dashboardDescription"
+                      Write-Host "##[debug]  Folder Path: $folderPath"
+                      Write-Host "##[debug]  Content File: $contentFile"
+                     
+                      # Create dashboard using PowerShell script
+                      $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Invoke-KQLDashboardManagement.ps1"
+                      $folderHierarchy = if ([string]::IsNullOrEmpty($env:FOLDER_HIERARCHY)) { $null } else { $env:FOLDER_HIERARCHY }
+                     
+                      # Build parameters dynamically
+                      $dashboardParams = @(
+                          "-Action", "'CreateOrUpdate'"
+                          "-WorkspaceId", "'$WorkspaceId'"
+                          "-DisplayName", "'$dashboardDisplayName'"
+                          "-PlatformFile", "'$($platformFile.FullName)'"
+                      )
+                     
+                      # Add optional parameters only if they have values
+                      if (![string]::IsNullOrEmpty($dashboardDescription)) {
+                          $dashboardParams += "-Description", "'$dashboardDescription'"
+                      }
+                     
+                      if ($null -ne $dashboardContent -and (Test-Path $contentFile)) {
+                          $dashboardParams += "-ContentFile", "'$contentFile'"
+                      }
+                     
+                      if (![string]::IsNullOrEmpty($folderHierarchy)) {
+                          $dashboardParams += "-FolderHierarchy", "'$folderHierarchy'"
+                      }
+                     
+                      if (![string]::IsNullOrEmpty($folderPath)) {
+                          $dashboardParams += "-FolderPath", "'$folderPath'"
+                      }
+                     
+                      # Execute the dashboard creation script
+                      $dashboardCommand = "& '$scriptPath' $($dashboardParams -join ' ')"
+                      Write-Host "##[debug]Executing: $dashboardCommand"
+                     
+                      $dashboardResult = Invoke-Expression $dashboardCommand
+                     
+                      if ($dashboardResult) {
+                          Write-Host "##[section]KQL Dashboard '$dashboardDisplayName' created/updated successfully"
+                         
+                          $createdDashboards += @{
+                              DisplayName = $dashboardDisplayName
+                              Description = $dashboardDescription
+                              WorkspaceId = $WorkspaceId
+                              FolderPath = $folderPath
+                              ContentFile = $contentFile
+                          }
+                      } else {
+                          Write-Host "##vso[task.LogIssue type=warning;]Failed to create/update KQL dashboard: $dashboardDisplayName"
+                      }
+                     
+                  } catch {
+                      Write-Host "##vso[task.LogIssue type=error;]Error processing KQL dashboard '$($platformFile.Name)': $($_.Exception.Message)"
+                      Write-Host "##[debug]Stack Trace: $($_.ScriptStackTrace)"
+                      continue
+                  }
+              }
+             
+              Write-Host "##[section]KQL Dashboard creation/update process completed. Processed $($createdDashboards.Count) dashboards."
+             
+              # Create a summary of created dashboards for pipeline variables
+              if ($createdDashboards.Count -gt 0) {
+                  $dashboardSummary = $createdDashboards | ConvertTo-Json -Compress
+                  Write-Host "##[debug]Created KQL Dashboards Summary: $dashboardSummary"
+                  Write-Host "##vso[task.setvariable variable=CREATED_KQL_DASHBOARDS]$dashboardSummary"
+                 
+                  # Create a comma-separated list of dashboard names
+                  $dashboardNames = ($createdDashboards | ForEach-Object { $_.DisplayName }) -join ", "
+                  Write-Host "##vso[task.setvariable variable=KQL_DASHBOARD_NAMES]$dashboardNames"
+              } else {
+                  Write-Host "##vso[task.setvariable variable=CREATED_KQL_DASHBOARDS][]"
+                  Write-Host "##vso[task.setvariable variable=KQL_DASHBOARD_NAMES]"
+              }
+             
+          } catch {
+              Write-Host "##vso[task.LogIssue type=error;]Error creating KQL dashboards: $($_.Exception.Message)"
+              Write-Host "##vso[task.LogIssue type=error;]Stack Trace: $($_.ScriptStackTrace)"
+              Write-Host "##vso[task.complete result=Failed;]"
+              exit 1
+          }
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+      displayName: 'Create Fabric KQL Dashboards'
+
+    - task: PowerShell@2
+      name: handlePrivateEndpointApprovals
+      displayName: 'Handle Private Endpoint Approvals'
+      condition: and(succeeded(), ne(variables['FABRIC_PEP_DETAILED'], ''), or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true')))
+      inputs:
+        targetType: 'inline'
+        script: |
+          $scriptPath = '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Handle-PrivateEndpointApprovals.ps1'
+          & $scriptPath -PepDetailedJson '$(FABRIC_PEP_DETAILED)' -WorkspaceId '$(WORKSPACE_ID)' -WorkspaceName '$(WORKSPACE_NAME)' -ScriptBasePath '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)'
+      env:
+        FABRIC_TOKEN: $(FABRIC_TOKEN)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+      continueOnError: false
+
+    - task: PowerShell@2
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isRunCicdNotebooks'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))        
+      displayName: 'Retrieve and Process Fabric Notebooks'
+      inputs:
+        targetType: 'inline'
+        script:  |
+          Write-Host "Listing notebooks in workspace"
+          
+          $token = $env:FABRIC_TOKEN
+          $workspaceIds = ConvertFrom-Json -InputObject $env:WORKSPACE_IDS
+
+          $workspaceId = $workspaceIds.PSObject.Properties.Value
+          Write-Host ("Using workspace ID: " + $workspaceId)
+
+          $response = Invoke-RestMethod -Uri "https://api.fabric.microsoft.com/v1/workspaces/$workspaceId/notebooks" -Method Get -Headers @{
+              "Authorization" = "Bearer $token"
+          }
+          $notebookIds = ($response.value | ConvertTo-Json -Compress)
+          Write-Host ("Notebook IDs: " + $notebookIds)
+          
+          Write-Host "##vso[task.setvariable variable=NOTEBOOK_IDS]$notebookIds"
+
+          # Filter notebooks with '_cicd_' in the display name and set corresponding variable
+          $filteredNotebooks = $response.value | Where-Object { $_.displayName -like "*_cicd_*" }
+
+          # Only convert to array if it's not already an array
+          if ($filteredNotebooks -and $filteredNotebooks -isnot [Array]) {
+              $filteredNotebooks = @($filteredNotebooks)
+          }
+
+          if ($filteredNotebooks -and $filteredNotebooks.Count -gt 0) {
+            $notebookIds = ($filteredNotebooks.id | ConvertTo-Json -Compress)
+            Write-Host ("Filtered Notebook IDs: " + $notebookIds)
+            Write-Host "##vso[task.setvariable variable=CICD_NOTEBOOK_IDS]$notebookIds" 
+            Write-Host "##vso[task.setvariable variable=HAS_CICD_NOTEBOOKS]true"     
+          } else {           
+            Write-Host "No notebooks found with '_cicd_' in the display name."
+            Write-Host "##vso[task.setvariable variable=CICD_NOTEBOOK_IDS][]"
+            Write-Host "##vso[task.setvariable variable=HAS_CICD_NOTEBOOKS]false"
+          }
+
+    - task: PowerShell@2
+      displayName:  'Fabric Domain Configuration'
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))     
+      inputs:
+        targetType: 'inline'
+        script: |
+          $folder_hierarchy = $env:FOLDER_HIERARCHY 
+          $scriptPath = '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Setup-FabricDomains.ps1'
+          & $scriptPath -FolderHierarchy $folder_hierarchy
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'        
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        WORKSPACE_IDS: $env:WORKSPACE_IDS   
+        PARENT_DOMAIN_NAME: $env:PARENT_DOMAIN_NAME
+        CHILD_DOMAIN_NAME: $env:CHILD_DOMAIN_NAME
+        ADMIN_GROUP_PRINCIPAL_IDS: $env:ADMIN_GROUP_PRINCIPAL_IDS
+
+    - task: PowerShell@2
+      displayName: 'Fabric Data Pipelines Configuration'
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          $folder_hierarchy = $env:FOLDER_HIERARCHY 
+          $scriptPath = '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Setup-FabricDataPipelines.ps1'
+          & $scriptPath -FolderHierarchy $folder_hierarchy
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        WORKSPACE_IDS: $env:WORKSPACE_IDS
+        FABRIC_CONNECTIONS: $env:FABRIC_CONNECTIONS
+        NOTEBOOK_IDS: $env:NOTEBOOK_IDS
+        FABRIC_MANAGED_CONNECTIONS_DETAILED: $env:FABRIC_MANAGED_CONNECTIONS_DETAILED
+            
+    - task: PowerShell@2
+      displayName: 'Run CICD Notebooks'
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isRunCicdNotebooks'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Check if we have CICD notebooks to run
+          $hasCicdNotebooks = $env:HAS_CICD_NOTEBOOKS
+          Write-Host "Has CICD notebooks flag: $hasCicdNotebooks"
+        
+          if ($hasCicdNotebooks -ne 'true') {
+              Write-Host "##[warning]No CICD notebooks found to execute. Skipping notebook execution."
+              exit 0
+          }
+          # Parse the JSON string of notebook IDs
+          $notebookIds = $null
+          try {
+            $notebookIds = ConvertFrom-Json -InputObject $env:CICD_NOTEBOOK_IDS -ErrorAction Stop
+            Write-Host "Found notebook IDs: $($notebookIds | ConvertTo-Json -Compress)"
+          }
+          catch {
+            Write-Warning "Error parsing CICD_NOTEBOOK_IDS: $_"
+            Write-Host "Raw value: $env:CICD_NOTEBOOK_IDS"
+            exit 1
+          }
+          
+          # Get workspace ID
+          $workspaceIds = ConvertFrom-Json -InputObject $env:WORKSPACE_IDS
+          $workspaceId = $workspaceIds.PSObject.Properties.Value
+          Write-Host "Using workspace ID: $workspaceId"
+          
+          # Set up headers for API calls
+          $Headers = @{
+            "Authorization" = "Bearer $env:FABRIC_TOKEN"
+          }
+          
+          # Track results
+          $runResults = @()
+          
+          # Iterate through each notebook ID and run it
+          foreach ($notebookId in $notebookIds) {
+            try {
+              Write-Host "Starting notebook: $notebookId"
+              
+              # Send request to start the notebook using WebRequest to get headers
+              $startNotebookUrl = "https://api.fabric.microsoft.com/v1/workspaces/$workspaceId/items/$notebookId/jobs/instances?jobType=RunNotebook"
+              $startResponse = Invoke-WebRequest -Uri $startNotebookUrl -Headers $Headers -Method POST -UseBasicParsing
+              
+              # Get the job URL from the Location header
+              $notebookJobUrl = $startResponse.Headers["Location"]
+              
+              Write-Host "NotebookJobUrl: $notebookJobUrl"
+
+
+              $waitJobsToFinish = [System.Convert]::ToBoolean("${{ parameters.waitJobsToFinish }}")
+              if (-not $waitJobsToFinish) {
+                  Write-Host "##[section]Not waiting for notebook execution to complete as per configuration."
+                  continue
+              }
+
+              if ($notebookJobUrl) {
+                  $maxWaitTime = 600  # 10 minutes
+                  $waitTime = 0
+                
+                  do {
+                      Start-Sleep -Seconds 10
+                      $waitTime += 10
+                    
+                      try {
+                          $statusResponse = Invoke-RestMethod -Uri $notebookJobUrl -Headers $Headers -Method GET
+                          Write-Host "##[debug]Job Status: $($statusResponse.status)"
+                        
+                          if ($statusResponse.status -eq "Completed") {
+                              Write-Host "##[section]Notebook execution completed successfully"
+                              break
+                          } elseif ($statusResponse.status -eq "Failed") {
+                              Write-Host "##[error]Notebook execution failed: $($statusResponse.error)"
+                              break
+                          }
+                      } catch {
+                          Write-Host "##[warning]Could not check job status: $($_.Exception.Message)"
+                      }
+                  } while ($waitTime -lt $maxWaitTime)
+              }
+
+            }
+            catch {
+              Write-Warning "Failed to run notebook $notebookId - Error: $_"
+              $runResults += [PSCustomObject]@{
+                NotebookId = $notebookId
+                JobUrl = "Error"
+                InitialStatus = "Failed"
+                Error = $_.Exception.Message
+              }
+            }
+          }
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        CICD_NOTEBOOK_IDS: $env:CICD_NOTEBOOK_IDS
+        WORKSPACE_IDS: $env:WORKSPACE_IDS
+
+    - task: PowerShell@2         
+      displayName: 'Configure and Deploy Semantic Models'
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateSemanticModelsAndReports'], 'true'))
+      inputs:    
+        targetType: 'inline'
+        script: |
+          $pwshPath = 'C:\Program Files\PowerShell\7\pwsh.exe'
+          $workspaceIds = ConvertFrom-Json -InputObject $env:WORKSPACE_IDS
+
+          $workspaceId = $workspaceIds.PSObject.Properties.Value
+          
+          Write-Host "Deploying Fabric Semantic Models for $workspaceId"
+
+          $folder_hierarchy = $env:FOLDER_HIERARCHY
+
+          Write-Host "Folder Hierarchy: $folder_hierarchy"
+
+          $scriptPath = '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Deploy-FabricSemanticModels.ps1'
+          & $scriptPath -FolderHierarchy $folder_hierarchy -SemanticModelsDetailJson $env:FABRIC_SEMANTIC_MODELS_DETAILED -SemanticModelsParametersDetailJson $env:FABRIC_SEMANTIC_MODELS_PARAMETER_DETAILED
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'    
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        WORKSPACE_IDS: $env:WORKSPACE_IDS
+        FABRIC_CONNECTIONS: $env:FABRIC_CONNECTIONS
+
+    - task: PowerShell@2
+      displayName: 'Configure and Deploy Reports'
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateSemanticModelsAndReports'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          $pwshPath = 'C:\Program Files\PowerShell\7\pwsh.exe'
+          $workspaceIds = ConvertFrom-Json -InputObject $env:WORKSPACE_IDS
+
+          $workspaceId = $workspaceIds.PSObject.Properties.Value
+          
+          Write-Host "Deploying Fabric Reports for $workspaceId"
+
+          $folder_hierarchy = $env:FOLDER_HIERARCHY
+
+          Write-Host "Folder Hierarchy: $folder_hierarchy"
+          
+          $scriptPath = '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Deploy-FabricReports.ps1'
+          & $scriptPath -FolderHierarchy $folder_hierarchy
+          
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'         
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        WORKSPACE_IDS: $env:WORKSPACE_IDS     
+
+    - task: PowerShell@2
+      displayName: 'Upload & Publish Environment Spark Libraries'
+      condition: or(and(eq(variables['isDefault'], 'true'), eq(variables['isUpgradeSparkLibraries'], 'true')), eq(variables['isUpdateSparkEnvironment'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          $env:UPGRADE_SPARK_LIBRARIES = "true"
+          $pwshPath = 'C:\Program Files\PowerShell\7\pwsh.exe'
+          $workspaceIds = ConvertFrom-Json -InputObject $env:WORKSPACE_IDS
+
+          $workspaceId = $workspaceIds.PSObject.Properties.Value
+          
+          Write-Host "Deploying Fabric Environment Spark Libraries $workspaceId"
+
+          & $pwshPath -File $scriptPath '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Deploy-FabricEnvironmentSparkLibraries.ps1'
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        WORKSPACE_IDS: $env:WORKSPACE_IDS
+        UPGRADE_SPARK_LIBRARIES: $env:UPGRADE_SPARK_LIBRARIES 
+
+    - task: PowerShell@2
+      condition: eq(${{ parameters.isGitConnect }}, true)
+      displayName: 'Git Connect and Sync'
+      name: gitConnect
+      inputs:
+        targetType: 'filePath'
+        filePath: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Fabric-GitOperations.ps1'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+        arguments: >
+          -Organization "$(TARGET_ORGANIZATION)"
+          -Project "$(TARGET_PROJECT)"
+          -Repository "$(TARGET_REPOSITORY)"
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN  
+        WORKSPACE_IDS: $env:WORKSPACE_IDS             
+
+    - task: PowerShell@2
+      displayName: 'Upload Monitoring Workspace Files'
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateMonitoringAndMetadataFiles'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          $pwshPath = 'C:\Program Files\PowerShell\7\pwsh.exe'
+          $workspaceIds = ConvertFrom-Json -InputObject $env:WORKSPACE_IDS
+
+          $workspaceId = $workspaceIds.PSObject.Properties.Value
+          
+          Write-Host "Uploading files to $workspaceId"
+
+          & $pwshPath -File $scriptPath '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Fabric-LakehouseUpload.ps1'
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        WORKSPACE_IDS: $env:WORKSPACE_IDS
+        LAKEHOUSE_NAME: 'den_lhw_pdv_001_semanticmodel_monitoring'
+        SOURCE_PATH: 'src/documents/BPA Rules'
+        TARGET_PATH: 'BPA_Rules'
+
+    - task: PowerShell@2
+      displayName: 'Upload Metadata Lakehouse Files'
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateMonitoringAndMetadataFiles'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          $pwshPath = 'C:\Program Files\PowerShell\7\pwsh.exe'
+          $workspaceIds = ConvertFrom-Json -InputObject $env:WORKSPACE_IDS
+
+          $workspaceId = $workspaceIds.PSObject.Properties.Value
+          
+          Write-Host "Uploading files to $workspaceId"  
+
+          & $pwshPath -File $scriptPath '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Fabric-LakehouseUpload.ps1'
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        WORKSPACE_IDS: $env:WORKSPACE_IDS
+        LAKEHOUSE_NAME: 'den_lhw_pdi_001_metadata'
+        SOURCE_PATH: 'src/metadata'
+        TARGET_PATH: ''
+
+
+    - task: PowerShell@2
+      displayName: 'Run Ellie Notebooks'
+      condition: or(eq(variables['isDefault'], 'true'), eq(variables['isUpdateNotebooksAndDatapipelines'], 'true'))
+      inputs:
+        targetType: 'inline'
+        script: |
+          # Parse the JSON string of notebook IDs
+          $notebookIds = $null
+          try {
+            $notebookIds = ConvertFrom-Json -InputObject $env:ELLIE_NOTEBOOK_IDS -ErrorAction Stop
+            Write-Host "Found notebook IDs: $($notebookIds | ConvertTo-Json -Compress)"
+          }
+          catch {
+            Write-Warning "No Ellie notebooks to run."
+            exit 0
+          }
+          
+          # Get workspace ID
+          $workspaceIds = ConvertFrom-Json -InputObject $env:WORKSPACE_IDS
+          $workspaceId = $workspaceIds.PSObject.Properties.Value
+          Write-Host "Using workspace ID: $workspaceId"
+          
+          # Set up headers for API calls
+          $Headers = @{
+            "Authorization" = "Bearer $env:FABRIC_TOKEN"
+          }
+          
+          # Track results
+          $runResults = @()
+          
+          # Iterate through each notebook ID and run it
+          foreach ($notebookId in $notebookIds) {
+            try {
+              Write-Host "Starting notebook: $notebookId"
+              
+              # Send request to start the notebook using WebRequest to get headers
+              $startNotebookUrl = "https://api.fabric.microsoft.com/v1/workspaces/$workspaceId/items/$notebookId/jobs/instances?jobType=RunNotebook"
+              $startResponse = Invoke-WebRequest -Uri $startNotebookUrl -Headers $Headers -Method POST -UseBasicParsing
+              
+              # Get the job URL from the Location header
+              $notebookJobUrl = $startResponse.Headers["Location"]
+              
+              Write-Host "NotebookJobUrl: $notebookJobUrl"
+            }
+            catch {
+              Write-Warning "Failed to run notebook $notebookId - Error: $_"
+              $runResults += [PSCustomObject]@{
+                NotebookId = $notebookId
+                JobUrl = "Error"
+                InitialStatus = "Failed"
+                Error = $_.Exception.Message
+              }
+            }
+          }
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'
+      env:
+        FABRIC_TOKEN: $env:FABRIC_TOKEN
+        ELLIE_NOTEBOOK_IDS: $env:ELLIE_NOTEBOOK_IDS
+        WORKSPACE_IDS: $env:WORKSPACE_IDS
+    
+    - task: PowerShell@2
+      displayName: 'Remove temporary files'
+      inputs:
+        targetType: 'inline'
+        script: |
+          
+          $pwshPath = 'C:\Program Files\PowerShell\7\pwsh.exe'
+
+          & $pwshPath -File $scriptPath '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Remove-TempFiles.ps1'
+
+        pwsh: false
+        workingDirectory: '$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts'        
