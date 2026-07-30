@@ -1,3 +1,38 @@
+ # ------------------------------------------------------------------
+    # 4. Extended properties and ownership metadata (shared)
+    # ------------------------------------------------------------------
+    dl_table_path_sdr = f"{lhs_path_root}/Tables/catalog/source_dataset_request"
+    dl_table_path_exp = f"{lhs_path_root}/Tables/catalog/table_ext_properties_crqry"
+    query = f"""
+        SELECT
+            sdr.database_name,
+            sdr.schema_name,
+            sdr.table_name,
+            sdr.domain_owner,
+            exp.extended_property_value	
+        FROM delta.`{dl_table_path_sdr}` AS sdr
+        LEFT JOIN delta.`{dl_table_path_exp}` AS exp
+            ON  sdr.database_name = exp.database_name
+            AND sdr.schema_name = exp.dataset_schema
+            AND sdr.table_name=exp.dataset_name
+        WHERE exp.extended_property_name = 'ms_description'
+    """
+    logger.info(f"Loading primary-key metadata from {dl_table_path_pk}")
+    exp_dataset_df: DataFrame = spark.sql(query)
+
+"deltaTableProperties": {
+        "description": exp.extended_property_value,
+        "owner": "DnA Platform Services",
+        "tblproperties": {
+            "governance.data_domain": sdr.domain_owner,
+            "governance.sensitivity": "Private",
+            "refresh_cadence": "Mon-Fri"
+        }
+    }
+
+
+
+
 from typing import Literal, Optional, List, Dict, Any
 from pyspark.sql import DataFrame, Row
 from pyspark.sql import functions as F
