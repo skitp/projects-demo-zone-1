@@ -1,257 +1,142 @@
-def create_dataset_files_cdc() -> None:
+from typing import Literal, Optional, List, Dict, Any
+from pyspark.sql import DataFrame, Row
+from pyspark.sql import functions as F
+import json
+
+
+def create_dataset_files(mode: Literal["cdc", "incremental"] = "incremental") -> None:
     """
-    Generate per-dataset JSON configuration files for incremental load based on dictionary and metadata tables:
-        - curated_dataset_list
-        - curated_dataset_column_list
+    Generate per-dataset JSON configuration files for IIS source datasets.
+
+    Supports two modes:
+      - "cdc"         → CDC ingest (subfolder: iis_cdc)
+      - "incremental" → watermark or full load (subfolder: iis_base)
+
+    Metadata sources:
+      - source_dataset_column_list
+      - source_dataset_pk_list / source_dataset_list
+      - source_dataset_request (+ cdc_dataset_list_crqry for CDC mode)
+
+    Only datasets with status = 'initiated' in source_dataset_request are processed.
 
     Returns:
-        None: Saves JSON files to the output directory.
+        None. Writes one JSON file per dataset under {datasets_path}/{subfolder}/.
     """
-    dataset_subfolder = "iis_cdc"
+    if mode not in ("cdc", "incremental"):
+        raise ValueError(f"mode must be 'cdc' or 'incremental', got '{mode}'")
 
-    # Load metadata tables
-    # 1. Source columns
+    dataset_subfolder = "iis_cdc" if mode == "cdc" else "iis_base"
+    logger.info(f"Starting dataset config generation in mode='{mode}' → subfolder '{dataset_subfolder}'")
+
+    # ------------------------------------------------------------------
+    # 1. Common metadata: source columns
+    # ------------------------------------------------------------------
     dl_table_path = f"{lhs_path_root}/Tables/catalog/source_dataset_column_list"
     query = f"""
-        SELECT dataset_name, column_name, column_data_type FROM delta.`{dl_table_path}`
+        SELECT dataset_name, column_name, column_data_type
+        FROM delta.`{dl_table_path}`
     """
-    logger.info(f"Getting metadata from {dl_table_path} table...")
-    source_column_df = spark.sql(query)
+    logger.info(f"Loading column metadata from {dl_table_path}")
+    source_column_df: DataFrame = spark.sql(query)
 
-    # 2. Matched SQL DB with ADO requested (cdc) tables
-    dl_table_path_cdc = f"{lhs_path_root}/Tables/catalog/cdc_dataset_list_crqry"
-    dl_table_path_sdr = f"{lhs_path_root}/Tables/catalog/source_dataset_request"
-    query = f"""
-        SELECT 
-            sdr.database_name, sdr.schema_name, sdr.table_name
-        FROM delta.`{dl_table_path_cdc}` as cdc
-        INNER JOIN
-            delta.`{dl_table_path_sdr}` as sdr
-        ON sdr.database_name = cdc.database_name
-        AND sdr.schema_name = cdc.dataset_schema
-        AND sdr.table_name = cdc.dataset_name
-        WHERE sdr.status = 'initiated'
-    """
-    logger.info(f"Getting metadata from {dl_table_path_cdc} table...")
-    cdc_dataset_df = spark.sql(query)
+    # ------------------------------------------------------------------
+    # 2. Mode-specific list of datasets that are ready to process
+    # ------------------------------------------------------------------
+    if mode == "cdc":
+        dl_table_path_cdc = f"{lhs_path_root}/Tables/catalog/cdc_dataset_list_crqry"
+        dl_table_path_sdr = f"{lhs_path_root}/Tables/catalog/source_dataset_request"
+        query = f"""
+            SELECT
+                sdr.database_name,
+                sdr.schema_name,
+                sdr.table_name
+            FROM delta.`{dl_table_path_cdc}` AS cdc
+            INNER JOIN delta.`{dl_table_path_sdr}` AS sdr
+                ON  sdr.database_name = cdc.database_name
+                AND sdr.schema_name   = cdc.dataset_schema
+                AND sdr.table_name    = cdc.dataset_name
+            WHERE sdr.status = 'initiated'
+        """
+        logger.info(f"Loading CDC-initiated datasets from {dl_table_path_cdc}")
+    else:  # incremental
+        dl_table_path_sdl = f"{lhs_path_root}/Tables/catalog/source_dataset_list"
+        dl_table_path_sdr = f"{lhs_path_root}/Tables/catalog/source_dataset_request"
+        query = f"""
+            SELECT
+                sdr.database_name,
+                sdr.schema_name,
+                sdr.table_name
+            FROM delta.`{dl_table_path_sdr}` AS sdr
+            INNER JOIN delta.`{dl_table_path_sdl}` AS sdl
+                ON  sdr.database_name = sdl.database_name
+                AND sdr.schema_name   = sdl.dataset_schema
+                AND sdr.table_name    = sdl.dataset_name
+            WHERE sdr.status = 'initiated'
+        """
+        logger.info(f"Loading incremental-initiated datasets from {dl_table_path_sdr}")
 
-    # 3. Get primary keys from backfilled and SQL DB metadata tables
-    dl_table_path_pk = f"{lhs_path_root}/Tables/catalog/source_dataset_pk_list"
+    request_df: DataFrame = spark.sql(query)
+    datasets_to_process: List[Row] = (
+        request_df
+        .select("database_name", "schema_name", "table_name")
+        .distinct()
+        .collect()
+    )
+
+    if not datasets_to_process:
+        logger.warning(f"No initiated datasets found for mode='{mode}'. Nothing to generate.")
+        return
+
+    # ------------------------------------------------------------------
+    # 3. Primary-key metadata (shared)
+    # ------------------------------------------------------------------
+    dl_table_path_pk  = f"{lhs_path_root}/Tables/catalog/source_dataset_pk_list"
     dl_table_path_sdl = f"{lhs_path_root}/Tables/catalog/source_dataset_list"
     query = f"""
-        SELECT 
-            sdl.database_name, sdl.dataset_schema, sdl.dataset_name, COALESCE(sdl.primary_key_list, pk.primary_key_list) AS primary_key_list
-        FROM delta.`{dl_table_path_sdl}` as sdl
-        LEFT JOIN delta.`{dl_table_path_pk}` as pk
-            ON sdl.database_name = pk.database_name
+        SELECT
+            sdl.database_name,
+            sdl.dataset_schema,
+            sdl.dataset_name,
+            COALESCE(sdl.primary_key_list, pk.primary_key_list) AS primary_key_list
+        FROM delta.`{dl_table_path_sdl}` AS sdl
+        LEFT JOIN delta.`{dl_table_path_pk}` AS pk
+            ON  sdl.database_name  = pk.database_name
             AND sdl.dataset_schema = pk.dataset_schema
-            AND sdl.dataset_name = pk.dataset_name;
-        """
-    logger.info(f"Getting metadata from {dl_table_path_pk} table...")
-    pk_dataset_df = spark.sql(query)
+            AND sdl.dataset_name   = pk.dataset_name
+    """
+    logger.info(f"Loading primary-key metadata from {dl_table_path_pk}")
+    pk_dataset_df: DataFrame = spark.sql(query)
 
+    # ------------------------------------------------------------------
+    # 4. Process each requested dataset
+    # ------------------------------------------------------------------
+    generated_count = 0
+    skipped_count   = 0
 
-    # Get unique datasets
-    datasets = source_column_df.select("dataset_name").distinct().collect()
+    for row in datasets_to_process:
+        database_name  = row["database_name"]
+        dataset_schema = row["schema_name"]
+        dataset_name   = row["table_name"]
 
-    #for dataset_name in datasets:
-    for row in datasets:
-        dataset_name = row[0]
-        # Filter curated columns for this dataset
-        ds_curated = source_column_df.filter(f"dataset_name = '{dataset_name}'")
-
-        if ds_curated.count() == 0:
-            print(f"Skipping {dataset_name}: No columns to load.")
+        # ---- columns ----
+        ds_curated = source_column_df.filter(F.col("dataset_name") == dataset_name)
+        if ds_curated.isEmpty():
+            logger.warning(f"Skipping {database_name}.{dataset_schema}.{dataset_name}: no columns found in source_dataset_column_list")
+            skipped_count += 1
             continue
 
-        columns = ds_curated.select("column_name").rdd.map(lambda row: row[0]).collect()
-        data_types_rows = ds_curated.select("column_name", "column_data_type").collect()
-        data_types = {row["column_name"]: row["column_data_type"] for row in data_types_rows}
+        col_rows = ds_curated.select("column_name", "column_data_type").collect()
+        columns: List[str] = [r["column_name"] for r in col_rows]
+        data_types: Dict[str, str] = {r["column_name"]: r["column_data_type"] for r in col_rows}
 
-        # Set defaults
-        partition_keys = []
-        additional_selects = []
-        is_dynamic_query = True
-
-        # CDC ingest type:
-        ingest_type = 'cdc'
-        watermark_id = None
-
-        # Build includeSpecificColumns list
-        select_list = []
-        for col_name in columns:
-            col_lower = col_name.lower()
-            dt = data_types.get(col_name, '').lower()
-            if dt == 'geography':
-                select_list.append(f"CAST({col_lower} AS VARCHAR(255)) AS {col_lower}")
-            elif dt == 'char':
-                select_list.append(f"TRIM({col_lower}) AS {col_lower}")
-            else:
-                select_list.append(col_lower)
-
-        primary_key_list = []
-
-        # Get primaryKeyList from curated_dataset_list (assuming it's a comma-separated string)
-        pk_row = pk_dataset_df.filter(f"dataset_name = '{dataset_name}'").select("primary_key_list", "database_name", "dataset_schema").first()
-
-        primary_key_list = json.loads(pk_row[0]) if pk_row and pk_row[0] else []
-        primary_key_list = [c.lower().strip() for c in primary_key_list]
-
-        # Get database name and schema name from curated_dataset_list
-        database_name = pk_row[1]
-        dataset_schema = pk_row[2]
-
-        # Determine targetLoadType
-        target_load_type = "merge" if primary_key_list and ingest_type != "full" else "overwrite"
-
-        # Determine filter expression
-        base_filter = filter_map.get(dataset_name)
-
-        filter_expression = None
-        if base_filter:
-            # Normilize: make sure it starts with AND if needed
-            cleaned = base_filter.strip()
-            if watermark_id:
-                # For watermark / incremental loads → must start with AND
-                if not cleaned.upper().startswith("AND "):
-                    filter_expression = "AND " + cleaned
-                else:
-                    filter_expression = cleaned
-            else:
-                # For full loads → we keep it as provided
-                if cleaned.upper().startswith("AND "):
-                    filter_expression = cleaned[4:].strip()  # remove leading AND
-                else:
-                    filter_expression = cleaned
-
-        #  Build sourceSystemProperties
-        source_props = {
-            "sourceSystemName": "IIS",
-            "includeSpecificColumns": select_list,
-            "ingestType": ingest_type,
-            "isDynamicQuery": is_dynamic_query
-        }
-
-        if filter_expression:
-            source_props["filterExpression"] = filter_expression
-
-        # Build the dataset config dictionary
-        config = {
-            "datasetName": dataset_name,
-            "enable": True,
-            "datasetTypeName": "database",
-            "databaseName": database_name,
-            "datasetSchema": dataset_schema,
-            "skipProductLoad": False,
-            "sourceSystemProperties": source_props,
-            "rawProperties": {
-                "lakehouseName": lakehouse_name,
-                "fileType": "parquet",
-                "directoryName": f"iis_{database_name}".upper(),
-                "removeSourceFiles": True
-            },
-            "curatedProperties": {
-                "lakehouseName": lakehouse_name,
-                "schemaName": database_name,
-                "primaryKeyList": primary_key_list,
-                "duplicateCheckEnabled": False,
-                "targetFileFormat": "delta",
-                "targetLoadType": target_load_type
-            }
-        }
-
-        # Save dataset to JSON file
-        dataset_json_path = f"{datasets_path}/{dataset_subfolder}/{dataset_name}.json"
-        with dfs.open(dataset_json_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=4)
-
-        print(f"Generated config for {dataset_name}: {dataset_json_path}")
-      def create_dataset_files_incremental() -> None:
-    """
-    Generate per-dataset JSON configuration files for incremental load based on dictionary and metadata tables:
-        - curated_dataset_list
-        - curated_dataset_column_list
-
-    Returns:
-        None: Saves JSON files to the output directory.
-    """
-    dataset_subfolder = "iis_base"
-
-    # Load metadata tables
-    # 1. Source columns
-    dl_table_path = f"{lhs_path_root}/Tables/catalog/source_dataset_column_list"
-    query = f"""
-        SELECT dataset_name, column_name, column_data_type FROM delta.`{dl_table_path}`
-    """
-    logger.info(f"Getting metadata from {dl_table_path} table...")
-    source_column_df = spark.sql(query)
-
-    # 2. Matched SQL DB with ADO requested (new) tables
-    dl_table_path_sdl = f"{lhs_path_root}/Tables/catalog/source_dataset_list"
-    dl_table_path_sdr = f"{lhs_path_root}/Tables/catalog/source_dataset_request"
-    query = f"""
-        SELECT 
-            sdr.database_name, sdr.schema_name, sdr.table_name
-        FROM delta.`{dl_table_path_sdr}` as sdr
-        INNER JOIN
-            delta.`{dl_table_path_sdl}` as sdl
-        ON sdr.database_name = sdl.database_name
-        AND sdr.schema_name = sdl.dataset_schema
-        AND sdr.table_name = sdl.dataset_name
-        WHERE sdr.status = 'initiated'
-    """
-    logger.info(f"Getting metadata from {dl_table_path_sdr} table...")
-    incremental_dataset_df = spark.sql(query)
-
-    # 3. Get primary keys from backfilled and SQL DB metadata tables
-    dl_table_path_pk = f"{lhs_path_root}/Tables/catalog/source_dataset_pk_list"
-    query = f"""
-        SELECT 
-            sdl.database_name, sdl.dataset_schema, sdl.dataset_name, COALESCE(sdl.primary_key_list, pk.primary_key_list) AS primary_key_list
-        FROM delta.`{dl_table_path_sdl}` as sdl
-        LEFT JOIN delta.`{dl_table_path_pk}` as pk
-            ON sdl.database_name = pk.database_name
-            AND sdl.dataset_schema = pk.dataset_schema
-            AND sdl.dataset_name = pk.dataset_name;
-        """
-    logger.info(f"Getting metadata from {dl_table_path_pk} table...")
-    pk_dataset_df = spark.sql(query)
-
-
-    # Get unique datasets
-    datasets = source_column_df.select("dataset_name").distinct().collect()
-
-    #for dataset_name in datasets:
-    for row in datasets:
-        dataset_name = row[0]
-        # Filter curated columns for this dataset
-        ds_curated = source_column_df.filter(f"dataset_name = '{dataset_name}'")
-
-        if ds_curated.count() == 0:
-            print(f"Skipping {dataset_name}: No columns to load.")
-            continue
-
-        columns = ds_curated.select("column_name").rdd.map(lambda row: row[0]).collect()
-        data_types_rows = ds_curated.select("column_name", "column_data_type").collect()
-        data_types = {row["column_name"]: row["column_data_type"] for row in data_types_rows}
-
-        # Set defaults
-        partition_keys = []
-        additional_selects = []
-        is_dynamic_query = True
-
-        # Default ingest type:
-        ingest_type = None
-        watermark_id = None
-        if ingest_type:
-            watermark_id = None
-
+        # ---- ingest type + watermark ----
+        if mode == "cdc":
+            ingest_type: Optional[str] = "cdc"
+            watermark_id: Optional[str] = None
         else:
-            lower_columns = [
-                col.lower().strip('[]') for col in columns
-            ]
-            has_updateon = 'updateon' in lower_columns
-            has_enteredon = 'enteredon' in lower_columns
+            lower_columns = [c.lower().strip("[]") for c in columns]
+            has_updateon  = "updateon"  in lower_columns
+            has_enteredon = "enteredon" in lower_columns
 
             if has_updateon or has_enteredon:
                 ingest_type = "watermark"
@@ -259,75 +144,77 @@ def create_dataset_files_cdc() -> None:
                     watermark_id = "COALESCE(updateon, enteredon)"
                 elif has_updateon:
                     watermark_id = "updateon"
-                elif has_enteredon:
+                else:
                     watermark_id = "enteredon"
-            else: 
+            else:
                 ingest_type = "full"
                 watermark_id = None
 
-        # Build includeSpecificColumns list
-        select_list = []
+        # ---- includeSpecificColumns (with type-aware transforms) ----
+        select_list: List[str] = []
         for col_name in columns:
             col_lower = col_name.lower()
-            dt = data_types.get(col_name, '').lower()
-            if dt == 'geography':
+            dt = data_types.get(col_name, "").lower()
+            if dt == "geography":
                 select_list.append(f"CAST({col_lower} AS VARCHAR(255)) AS {col_lower}")
-            elif dt == 'char':
+            elif dt == "char":
                 select_list.append(f"TRIM({col_lower}) AS {col_lower}")
             else:
                 select_list.append(col_lower)
 
-        primary_key_list = []
+        # ---- primary keys (strict match on db + schema + name) ----
+        pk_row = (
+            pk_dataset_df
+            .filter(
+                (F.col("database_name")  == database_name) &
+                (F.col("dataset_schema") == dataset_schema) &
+                (F.col("dataset_name")   == dataset_name)
+            )
+            .select("primary_key_list")
+            .first()
+        )
 
-        # Get primaryKeyList from curated_dataset_list (assuming it's a comma-separated string)
-        pk_row = pk_dataset_df.filter(f"dataset_name = '{dataset_name}'").select("primary_key_list", "database_name", "dataset_schema").first()
+        primary_key_list: List[str] = []
+        if pk_row and pk_row["primary_key_list"]:
+            try:
+                primary_key_list = json.loads(pk_row["primary_key_list"])
+                primary_key_list = [c.lower().strip() for c in primary_key_list]
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.warning(
+                    f"{database_name}.{dataset_schema}.{dataset_name}: "
+                    f"could not parse primary_key_list → treating as empty. Error: {e}"
+                )
+                primary_key_list = []
 
-        primary_key_list = json.loads(pk_row[0]) if pk_row and pk_row[0] else []
-        primary_key_list = [c.lower().strip() for c in primary_key_list]
-
-        # Get database name and schema name from curated_dataset_list
-        database_name = pk_row[1]
-        dataset_schema = pk_row[2]
-
-        # Determine targetLoadType
+        # ---- target load type ----
         target_load_type = "merge" if primary_key_list and ingest_type != "full" else "overwrite"
 
-        # Determine filter expression
+        # ---- filter expression (normalised) ----
+        filter_expression: Optional[str] = None
         base_filter = filter_map.get(dataset_name)
-
-        filter_expression = None
         if base_filter:
-            # Normilize: make sure it starts with AND if needed
             cleaned = base_filter.strip()
             if watermark_id:
-                # For watermark / incremental loads → must start with AND
-                if not cleaned.upper().startswith("AND "):
-                    filter_expression = "AND " + cleaned
-                else:
-                    filter_expression = cleaned
+                # watermark / cdc path → force leading AND
+                filter_expression = cleaned if cleaned.upper().startswith("AND ") else f"AND {cleaned}"
             else:
-                # For full loads → we keep it as provided
-                if cleaned.upper().startswith("AND "):
-                    filter_expression = cleaned[4:].strip()  # remove leading AND
-                else:
-                    filter_expression = cleaned
+                # full load → strip leading AND if present
+                filter_expression = cleaned[4:].strip() if cleaned.upper().startswith("AND ") else cleaned
 
-        #  Build sourceSystemProperties
-        source_props = {
+        # ---- sourceSystemProperties ----
+        source_props: Dict[str, Any] = {
             "sourceSystemName": "IIS",
             "includeSpecificColumns": select_list,
             "ingestType": ingest_type,
-            "isDynamicQuery": is_dynamic_query
+            "isDynamicQuery": True,
         }
-
         if watermark_id:
             source_props["sourceWatermarkIdentifier"] = watermark_id
-
         if filter_expression:
             source_props["filterExpression"] = filter_expression
 
-        # Build the dataset config dictionary
-        config = {
+        # ---- final config ----
+        config: Dict[str, Any] = {
             "datasetName": dataset_name,
             "enable": True,
             "datasetTypeName": "database",
@@ -339,7 +226,7 @@ def create_dataset_files_cdc() -> None:
                 "lakehouseName": lakehouse_name,
                 "fileType": "parquet",
                 "directoryName": f"iis_{database_name}".upper(),
-                "removeSourceFiles": True
+                "removeSourceFiles": True,
             },
             "curatedProperties": {
                 "lakehouseName": lakehouse_name,
@@ -347,13 +234,39 @@ def create_dataset_files_cdc() -> None:
                 "primaryKeyList": primary_key_list,
                 "duplicateCheckEnabled": False,
                 "targetFileFormat": "delta",
-                "targetLoadType": target_load_type
-            }
+                "targetLoadType": target_load_type,
+            },
         }
 
-        # Save dataset to JSON file
+        # ---- write JSON ----
         dataset_json_path = f"{datasets_path}/{dataset_subfolder}/{dataset_name}.json"
-        with dfs.open(dataset_json_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=4)
+        try:
+            with dfs.open(dataset_json_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4)
+            logger.info(f"Generated config → {dataset_json_path}")
+            generated_count += 1
+        except Exception as e:
+            logger.error(f"Failed to write {dataset_json_path}: {e}")
+            skipped_count += 1
 
-        print(f"Generated config for {dataset_name}: {dataset_json_path}")
+    logger.info(
+        f"Finished mode='{mode}'. "
+        f"Generated={generated_count}, Skipped={skipped_count}, "
+        f"Total requested={len(datasets_to_process)}"
+    )
+
+create_dataset_files("cdc")          # → iis_cdc/
+create_dataset_files("incremental")  # → iis_base/
+create_dataset_files()               # default = incremental
+
+Area,Before,After
+Structure,Two nearly identical functions,Single function with mode parameter
+Dataset selection,Loaded request tables but never used them – processed all columns,Only processes datasets that are actually status = 'initiated'
+PK lookup,Filtered only by dataset_name (fragile),Strict 3-part key match (db + schema + name)
+Error handling,Crashed on missing PK / bad JSON,Graceful fallback + warning
+Logging,Mixed print / logger,Consistent structured logging + final summary
+Dead code,"Unused partition_keys, additional_selects, dead if ingest_type",Removed
+Type safety,None,Full type hints + Literal
+Column collection,Unnecessary RDD map,Clean .collect()
+Filter expression,"Same logic, but now clearly documented",Explicit comment on AND normalisation rules
+
