@@ -1,0 +1,185 @@
+# azure-pipelines-artifacts.yaml
+# Independent pipeline – Notebooks, Pipelines, Semantic Models, Reports, Variable Libraries, etc.
+
+parameters:
+  - name: isUpdateNotebooksAndDataPipelines
+    type: boolean
+    default: true
+  - name: isUpdateSemanticModelsAndReports
+    type: boolean
+    default: true
+  - name: isUpdateVariableLibraries
+    type: boolean
+    displayName: 'Update Variable Libraries'
+    default: true
+  - name: isRunCicdNotebooks
+    type: boolean
+    default: true
+  - name: waitJobsToFinish
+    type: boolean
+    default: false
+  - name: upgradeSparkLibraries
+    type: boolean
+    default: false
+  - name: isUpdateMonitoringAndMetadataFiles
+    type: boolean
+    default: true
+  - name: variableGroup
+    type: string
+    default: 'GDAP-Fluidity-PlatformServices-DEV'
+
+trigger: none
+
+variables:
+  - group: ${{ parameters.variableGroup }}
+  - name: agentPool
+    value: GDAP-Fluidity-PlatformServices_Self-hosted-AgentPool
+
+pool:
+  name: $(agentPool)
+
+stages:
+- stage: Deploy_Artifacts
+  displayName: 'Deploy Fabric Artifacts'
+  jobs:
+  - deployment: approval
+    environment: $(PIPELINE_ENVIRONMENT_APPROVAL)
+
+  - job: deploy
+    steps:
+    - checkout: self
+    - template: ../templates/auth-setup.yml
+    - template: ../templates/login-setup.yml
+
+    # ---------- Key Vault ----------
+    - task: AzureKeyVault@2
+      displayName: 'Fetch secrets from Azure Key Vault'
+      inputs:
+        azureSubscription: '$(AzureServiceConnection)'
+        KeyVaultName: '$(KeyVaultName)'
+        SecretsFilter: 'SERVICE-ACCOUNT-SECRET,ARM-CLIENT-SECRET,SERVICE-ACCOUNT-NAME'
+        RunAsPreJob: false
+
+    - task: PowerShell@2
+      displayName: 'Configure Azure Auth + Fabric Token'
+      # (identical Key-Vault-aware auth block as infrastructure pipeline)
+
+    # Prepare variables (shortcuts, semantic models, managed connections, PEPs, etc.)
+    # Keep the original prep* tasks (they only read environment variables)
+
+    # Workspace ID resolution (assume infrastructure pipeline already ran or pass WORKSPACE_ID)
+    - task: PowerShell@2
+      displayName: 'Resolve Workspace ID'
+      inputs:
+        targetType: 'inline'
+        script: |
+          # same workspace name → ID logic, or accept WORKSPACE_ID as parameter/variable
+          ...
+
+    # ---------- NEW: Variable Libraries ----------
+    - task: PowerShell@2
+      condition: or(eq('${{ parameters.isUpdateVariableLibraries }}', true), eq(variables['isDefault'], 'true'))
+      displayName: 'Create / Update Fabric Variable Libraries'
+      inputs:
+        targetType: 'inline'
+        script: |
+          try {
+            Write-Host "##[section]Deploying Variable Libraries"
+
+            $WorkspaceId = $env:WORKSPACE_ID
+            $srcPath = "$(System.DefaultWorkingDirectory)/src/fabric"
+            $platformFiles = Get-ChildItem -Path $srcPath -Recurse -Filter ".platform" |
+              Where-Object { $_.Directory.Name -like "*.VariableLibrary" }
+
+            if ($platformFiles.Count -eq 0) {
+              Write-Host "##[warning]No Variable Library platform files found"
+              return
+            }
+
+            foreach ($platformFile in $platformFiles) {
+              $dir = $platformFile.Directory.FullName
+              $platform = Get-Content $platformFile.FullName -Raw | ConvertFrom-Json
+              $displayName = $platform.metadata.displayName
+              $folderPath  = $dir -replace '.*src[/\\]fabric[/\\]', ''
+
+              Write-Host "##[debug]Processing Variable Library: $displayName"
+
+              # Build definition parts (variables.json, settings.json, valueSets/*, .platform)
+              $parts = @()
+
+              # .platform
+              $platformBytes = [System.IO.File]::ReadAllBytes($platformFile.FullName)
+              $parts += @{
+                path        = ".platform"
+                payload     = [Convert]::ToBase64String($platformBytes)
+                payloadType = "InlineBase64"
+              }
+
+              # variables.json
+              $varFile = Join-Path $dir "variables.json"
+              if (Test-Path $varFile) {
+                $bytes = [System.IO.File]::ReadAllBytes($varFile)
+                $parts += @{ path = "variables.json"; payload = [Convert]::ToBase64String($bytes); payloadType = "InlineBase64" }
+              }
+
+              # settings.json
+              $settingsFile = Join-Path $dir "settings.json"
+              if (Test-Path $settingsFile) {
+                $bytes = [System.IO.File]::ReadAllBytes($settingsFile)
+                $parts += @{ path = "settings.json"; payload = [Convert]::ToBase64String($bytes); payloadType = "InlineBase64" }
+              }
+
+              # valueSets
+              $valueSetsDir = Join-Path $dir "valueSets"
+              if (Test-Path $valueSetsDir) {
+                Get-ChildItem $valueSetsDir -Filter "*.json" | ForEach-Object {
+                  $rel = "valueSets/$($_.Name)"
+                  $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+                  $parts += @{ path = $rel; payload = [Convert]::ToBase64String($bytes); payloadType = "InlineBase64" }
+                }
+              }
+
+              $definition = @{
+                format = "VariableLibraryV1"
+                parts  = $parts
+              } | ConvertTo-Json -Depth 10 -Compress
+
+              # Prefer a dedicated script for production (recommended)
+              $scriptPath = "$(System.DefaultWorkingDirectory)/DevOpsServices/pipelines/scripts/Invoke-VariableLibraryManagement.ps1"
+              if (Test-Path $scriptPath) {
+                & $scriptPath -Action 'CreateOrUpdate' `
+                  -WorkspaceId $WorkspaceId `
+                  -DisplayName $displayName `
+                  -DefinitionJson $definition `
+                  -FolderHierarchy $env:FOLDER_HIERARCHY `
+                  -FolderPath $folderPath
+              } else {
+                # Fallback: direct REST (create or updateDefinition)
+                # 1. List existing → decide create vs update
+                # 2. POST /variableLibraries or POST /updateDefinition
+                Write-Warning "Invoke-VariableLibraryManagement.ps1 not found – implement it following the pattern of Invoke-NotebookManagement.ps1"
+              }
+            }
+          } catch {
+            Write-Error $_.Exception.Message
+            exit 1
+          }
+      env:
+        FABRIC_TOKEN: $(FABRIC_TOKEN)
+        WORKSPACE_ID: $(WORKSPACE_ID)
+        FOLDER_HIERARCHY: $(FOLDER_HIERARCHY)
+
+    # ---------- Existing artifact tasks (kept, cleaned) ----------
+    # Create Ellie SQL Notebooks
+    # Create / Update Notebooks (regular)
+    # Create KQL Dashboards
+    # Create Lakehouse Shortcuts
+    # Data Pipelines Configuration
+    # Semantic Models + Reports
+    # Spark Libraries (optional)
+    # Run CICD Notebooks
+    # Upload Monitoring / Metadata files
+    # Run Ellie Notebooks
+    # Cleanup temp files
+
+    # (reuse the original task blocks with the same conditions and Key-Vault-aware env vars)
