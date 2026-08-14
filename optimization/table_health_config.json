@@ -1,0 +1,94 @@
+{
+  "assessment": {
+    "small_file_assessment": [
+      {
+        "maxAvgFileSizeMB": 32,
+        "score": 50,
+        "severity": "Critical"
+      },
+      {
+        "maxAvgFileSizeMB": 64,
+        "score": 30,
+        "severity": "Warning"
+      },
+      {
+        "maxAvgFileSizeMB": 128,
+        "score": 10,
+        "severity": "Monitor"
+      }
+    ],
+    "file_count_assessment": [
+      {
+        "maxFileCount": 1000,
+        "score": 0
+      },
+      {
+        "maxFileCount": 5000,
+        "score": 10
+      },
+      {
+        "maxFileCount": 10000,
+        "score": 25
+      },
+      {
+        "maxFileCount": 999999999,
+        "score": 40
+      }
+    ],
+    "optimize_age_assessment": [
+      {
+        "maxDays": 7,
+        "score": 0
+      },
+      {
+        "maxDays": 14,
+        "score": 5
+      },
+      {
+        "maxDays": 30,
+        "score": 15
+      },
+      {
+        "maxDays": 9999,
+        "score": 25
+      }
+    ],
+    "dml_activity_assessment": [
+      {
+        "maxOperations": 10,
+        "score": 0
+      },
+      {
+        "maxOperations": 50,
+        "score": 5
+      },
+      {
+        "maxOperations": 100,
+        "score": 15
+      },
+      {
+        "maxOperations": 9999999,
+        "score": 25
+      }
+    ]
+  },
+  "recommendation_thresholds": {
+    "healthy": 20,
+    "monitor": 40,
+    "optimize_soon": 75
+  },
+  "optimization_rules": {
+    "minimum_table_size_gb": 5,
+    "minimum_file_count": 1000,
+    "maximum_average_file_size_mb": 128,
+    "auto_optimize_threshold": 75,
+    "allow_auto_optimize": false,
+    "dml_lookback_days": 14,
+    "history_limit": 500
+  },
+  "runtime": {
+    "metrics_schema": "housekeeping",
+    "metrics_table": "table_health_metrics",
+    "default_dry_run": true
+  }
+}
