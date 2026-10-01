@@ -1,0 +1,588 @@
+Below is a production-oriented star schema for the FNOL liability payload. It preserves the claim-level grain, handles repeating entities such as people and incident types, separates PII from general claim attributes, and avoids turning the dynamic fields[] array into an unmanageable wide table.
+
+A star schema is appropriate because the central fact represents the FNOL business event, while dimensions provide descriptive context for filtering and analysis. This is also the recommended modeling pattern for Microsoft Fabric Warehouse and Power BI semantic models.
+
+1. Recommended business process and grain
+Business process
+
+First Notice of Loss, or FNOL, submission
+
+Primary fact grain
+
+One row in FactClaimFNOL per submitted FNOL reference.
+
+For the supplied payload:
+
+reference = GT-d658adab
+grain     = one row for this submitted FNOL
+
+
+Do not make one row per JSON field the primary analytical fact. That would make basic claim reporting difficult and require repeated filtering and pivoting.
+
+Some child objects have separate grains:
+
+One row per person involved in a claim
+One row per incident type selected for a claim
+One row per property damage item, when item-level details become available
+One row per original captured field, retained for audit and lineage
+2. Logical star schema
+                         DimDate
+                           |
+                           |
+DimPolicy ----------- FactClaimFNOL ----------- DimLineOfBusiness
+                           |
+                           |
+                      DimLossLocation
+                           |
+             +-------------+-------------+
+             |                           |
+     BridgeClaimParty              BridgeClaimIncidentType
+             |                           |
+          DimParty                    DimIncidentType
+             |
+       DimPartyRole
+
+Supporting:
+  FactClaimInjury
+  FactClaimPropertyDamage
+  DimInjurySeverity
+  DimDamageExtent
+  DimSourceChannel
+  AuditClaimField
+
+3. Core tables
+FactClaimFNOL
+
+Grain: One row per FNOL submission.
+
+Column	Type	PurposeClaimFNOLKey	BIGINT	Warehouse-generated surrogate key
+ClaimReference	VARCHAR(50)	Degenerate business key, such as GT-d658adab
+PolicyKey	BIGINT	FK to DimPolicy
+LineOfBusinessKey	INT	FK to DimLineOfBusiness
+SubmittedDateKey	INT	FK to DimDate
+LossDateKey	INT	FK to DimDate
+LossLocationKey	BIGINT	FK to DimLocation
+SourceChannelKey	INT	FK to DimSourceChannel
+IncidentDescription	VARCHAR(8000)	Narrative supplied with the claim
+ClaimNotes	VARCHAR(8000)	Generated or captured notes
+SomeoneInjuredFlag	BIT	Claim-level indicator
+ThirdPartyPropertyDamagedFlag	BIT	Claim-level indicator
+AttorneyInvolvementKnownFlag	BIT	Claim-level indicator
+VideoFootageExistsFlag	BIT	Claim-level indicator
+VideoFootagePreservedFlag	BIT	Claim-level indicator
+ReporterIsPrimaryContactFlag	BIT	Claim-level indicator
+InjuredPersonCount	INT	Additive claim count
+DamagedPropertyItemCount	INT	Additive count when known
+ClaimCount	INT	Always 1
+SubmittedAtUTC	DATETIME2(6)	Precise submission timestamp
+SourceRecordHash	BINARY(32)	Change and duplicate detection
+LoadBatchId	VARCHAR(100)	Pipeline lineage
+RecordCreatedUTC	DATETIME2(6)	Warehouse audit timestamp
+Why some columns are degenerate dimensions
+
+ClaimReference belongs directly on the fact because users will search and filter by the FNOL identifier, but a separate claim dimension would initially contain almost no additional descriptive value.
+
+DimPolicy
+
+Grain: One row per policy version.
+
+Column	Type	PurposePolicyKey	BIGINT	Surrogate key
+PolicyNumber	VARCHAR(50)	Business key
+BusinessName	VARCHAR(250)	Standardized insured business name
+LineOfBusinessCode	VARCHAR(100)	Policy LOB
+EffectiveFromUTC	DATETIME2(6)	SCD2 start
+EffectiveToUTC	DATETIME2(6)	SCD2 end
+IsCurrent	BIT	Current version flag
+
+For this record, standardize:
+
+Source value:    Copper Kettle Bistor
+Canonical value: Copper Kettle Bistro
+
+
+However, retain the original value in AuditClaimField. The canonical correction is supported by the notes but should still be treated as a data-quality resolution, not a silent source overwrite.
+
+DimLineOfBusiness
+Column	ExampleLineOfBusinessKey	Surrogate integer
+LineOfBusinessCode	bop-liability
+LineOfBusinessName	Business Owners Policy Liability
+ProductFamily	BOP
+
+This should be a conformed dimension reusable across claims, policies, exposures, and downstream claim facts.
+
+DimLocation
+
+Grain: One row per standardized location.
+
+Column	TypeLocationKey	BIGINT
+StreetAddress1	VARCHAR(250)
+StreetAddress2	VARCHAR(100)
+City	VARCHAR(100)
+StateCode	CHAR(2)
+StateName	VARCHAR(100)
+PostalCode	VARCHAR(20)
+CountryCode	CHAR(2)
+LocationHash	BINARY(32)
+
+Example:
+
+1490 Walnut Street
+Boulder, CO 80302
+US
+
+
+Use the standardized state code CO, while retaining Colorado as the state name.
+
+DimParty
+
+Grain: One row per mastered person or organization version.
+
+This dimension contains PII and should be secured separately.
+
+Column	TypePartyKey	BIGINT
+PartyBusinessKey	VARCHAR(100)
+PartyType	VARCHAR(30)
+FullName	VARCHAR(250)
+PhoneNumber	VARCHAR(50)
+EmailAddress	VARCHAR(320)
+StreetAddress1	VARCHAR(250)
+StreetAddress2	VARCHAR(100)
+City	VARCHAR(100)
+StateCode	VARCHAR(10)
+PostalCode	VARCHAR(20)
+AgeAtLoss	SMALLINT
+DateOfBirth	DATE
+PreferredLanguage	VARCHAR(100)
+EffectiveFromUTC	DATETIME2(6)
+EffectiveToUTC	DATETIME2(6)
+IsCurrent	BIT
+Parties identified in this payload
+Regina Alvarez
+Nadia Whitfeld
+
+Do not automatically correct Nadia Whitfeld to “Whitfield” based only on the email address. Store the captured name and raise a data-quality exception because the structured name and email disagree.
+
+AgeAtLoss = 34 should be populated, but DateOfBirth must remain null because the source field contains an age, not a DOB.
+
+DimPartyRole
+PartyRoleCode	PartyRoleNameREPORTER	Reporter
+PRIMARY_CONTACT	Primary Contact
+INJURED_PERSON	Injured Person
+PROPERTY_OWNER	Third-Party Property Owner
+POLICYHOLDER	Policyholder / Business Owner
+BridgeClaimParty
+
+Grain: One row per claim, party, and party role.
+
+Column	TypeClaimFNOLKey	BIGINT
+PartyKey	BIGINT
+PartyRoleKey	INT
+IsPrimaryFlag	BIT
+RoleSequenceNumber	SMALLINT
+AllocationWeight	DECIMAL(9,6)
+
+Example rows:
+
+Claim	Party	RoleGT-d658adab	Regina Alvarez	Reporter
+GT-d658adab	Regina Alvarez	Primary Contact
+GT-d658adab	Regina Alvarez	Policyholder / Business Owner
+GT-d658adab	Nadia Whitfeld	Injured Person
+GT-d658adab	Nadia Whitfeld	Property Owner
+
+This bridge avoids duplicating the same person into separate reporter, contact, claimant, and property-owner dimensions.
+
+DimIncidentType
+IncidentTypeCode	IncidentTypeNameslip_trip_fall	Slip, Trip, or Fall
+customer_or_visitor_injury	Customer or Visitor Injury
+damage_to_others_property	Damage to Others' Property
+BridgeClaimIncidentType
+
+Grain: One row per claim and selected incident type.
+
+Column	TypeClaimFNOLKey	BIGINT
+IncidentTypeKey	INT
+IsPrimaryIncidentType	BIT
+AllocationWeight	DECIMAL(9,6)
+
+For this submission, insert three bridge rows because liability_incident_type.values contains three selections.
+
+Do not concatenate the three values into a comma-delimited attribute. The bridge gives clean filtering and avoids multi-value parsing in Power BI.
+
+4. Secondary facts
+FactClaimInjury
+
+Grain: One row per injured party per claim.
+
+Column	TypeClaimInjuryKey	BIGINT
+ClaimFNOLKey	BIGINT
+InjuredPartyKey	BIGINT
+LossDateKey	INT
+InjurySeverityKey	INT
+InjuryCount	INT
+AgeAtLoss	SMALLINT
+InjuryDescription	VARCHAR(4000)
+
+Example:
+
+Injured party:    Nadia Whitfeld
+Severity:         Moderate Injury
+Age at loss:      34
+Injury count:     1
+Description:      Fractured left wrist
+
+
+Because “Moderate Injury” was not independently stated by the reporter, retain its lineage as captured or derived metadata. Do not present it as reporter-confirmed.
+
+FactClaimPropertyDamage
+
+Grain: One row per damaged property item per claim.
+
+Column	TypeClaimPropertyDamageKey	BIGINT
+ClaimFNOLKey	BIGINT
+PropertyOwnerPartyKey	BIGINT
+DamageExtentKey	INT
+PropertyType	VARCHAR(100)
+PropertyDescription	VARCHAR(1000)
+PropertyItemCount	INT
+EstimatedDamageAmount	DECIMAL(18,2)
+
+Example:
+
+Owner:                    Nadia Whitfeld
+Property type:            Laptop
+Property item count:      1
+Damage extent:            One item or small area
+Estimated damage amount:  NULL
+
+
+Do not assign an estimated amount because none was supplied.
+
+5. Audit table for original JSON fields
+
+A pure star schema is not sufficient for traceability because:
+
+The questionnaire can evolve.
+value and values have different structures.
+unanswerable and other_value may be analytically relevant.
+Corrected or standardized attributes must remain traceable to the source.
+
+Use this supporting audit table outside the presentation star.
+
+AuditClaimField
+
+Grain: One row per source claim field value. For arrays, use one row per array element.
+
+Column	TypeClaimReference	VARCHAR(50)
+FieldKey	VARCHAR(200)
+FieldLabel	VARCHAR(1000)
+FieldValueOrdinal	INT
+FieldValue	VARCHAR(8000)
+SourceChannel	VARCHAR(50)
+UnanswerableFlag	BIT
+OtherValue	VARCHAR(4000)
+RawValueType	VARCHAR(20)
+IngestedAtUTC	DATETIME2(6)
+
+For liability_incident_type, create three audit rows with ordinals 1, 2, and 3.
+
+This table should not normally be exposed directly to business users. It is primarily for reconciliation, schema-evolution analysis, lineage, and troubleshooting.
+
+6. Fabric-oriented T-SQL DDL
+
+The following DDL intentionally does not depend on enforced foreign keys or identity-generated surrogate keys. Surrogate keys should be assigned in the curated load process using stable key-map logic.
+
+CREATE SCHEMA claims;
+GO
+
+CREATE TABLE claims.DimDate
+(
+    DateKey             INT           NOT NULL,
+    FullDate            DATE          NOT NULL,
+    CalendarYear        SMALLINT      NOT NULL,
+    CalendarQuarter     TINYINT       NOT NULL,
+    CalendarMonth       TINYINT       NOT NULL,
+    MonthName           VARCHAR(20)   NOT NULL,
+    DayOfMonth          TINYINT       NOT NULL,
+    DayOfWeekNumber     TINYINT       NOT NULL,
+    DayOfWeekName       VARCHAR(20)   NOT NULL,
+    IsWeekend           BIT           NOT NULL
+);
+GO
+
+CREATE TABLE claims.DimLineOfBusiness
+(
+    LineOfBusinessKey   INT           NOT NULL,
+    LineOfBusinessCode  VARCHAR(100)  NOT NULL,
+    LineOfBusinessName  VARCHAR(250)  NOT NULL,
+    ProductFamily       VARCHAR(100)  NULL
+);
+GO
+
+CREATE TABLE claims.DimSourceChannel
+(
+    SourceChannelKey    INT           NOT NULL,
+    SourceChannelCode   VARCHAR(50)   NOT NULL,
+    SourceChannelName   VARCHAR(100)  NOT NULL
+);
+GO
+
+CREATE TABLE claims.DimPolicy
+(
+    PolicyKey           BIGINT        NOT NULL,
+    PolicyNumber        VARCHAR(50)   NOT NULL,
+    BusinessName        VARCHAR(250)  NULL,
+    LineOfBusinessCode  VARCHAR(100)  NULL,
+    EffectiveFromUTC    DATETIME2(6)  NOT NULL,
+    EffectiveToUTC      DATETIME2(6)  NULL,
+    IsCurrent           BIT           NOT NULL,
+    SourceRecordHash    BINARY(32)    NULL
+);
+GO
+
+CREATE TABLE claims.DimLocation
+(
+    LocationKey         BIGINT        NOT NULL,
+    StreetAddress1      VARCHAR(250)  NULL,
+    StreetAddress2      VARCHAR(100)  NULL,
+    City                VARCHAR(100)  NULL,
+    StateCode           VARCHAR(10)   NULL,
+    StateName           VARCHAR(100)  NULL,
+    PostalCode          VARCHAR(20)   NULL,
+    CountryCode         CHAR(2)       NULL,
+    LocationHash        BINARY(32)    NULL
+);
+GO
+
+CREATE TABLE claims.DimParty
+(
+    PartyKey            BIGINT        NOT NULL,
+    PartyBusinessKey    VARCHAR(100)  NOT NULL,
+    PartyType           VARCHAR(30)   NOT NULL,
+    FullName            VARCHAR(250)  NULL,
+    PhoneNumber         VARCHAR(50)   NULL,
+    EmailAddress        VARCHAR(320)  NULL,
+    StreetAddress1      VARCHAR(250)  NULL,
+    StreetAddress2      VARCHAR(100)  NULL,
+    City                 VARCHAR(100)  NULL,
+    StateCode           VARCHAR(10)   NULL,
+    PostalCode          VARCHAR(20)   NULL,
+    AgeAtLoss           SMALLINT      NULL,
+    DateOfBirth         DATE          NULL,
+    PreferredLanguage   VARCHAR(100)  NULL,
+    EffectiveFromUTC    DATETIME2(6)  NOT NULL,
+    EffectiveToUTC      DATETIME2(6)  NULL,
+    IsCurrent           BIT           NOT NULL,
+    SourceRecordHash    BINARY(32)    NULL
+);
+GO
+
+CREATE TABLE claims.DimPartyRole
+(
+    PartyRoleKey        INT           NOT NULL,
+    PartyRoleCode       VARCHAR(50)   NOT NULL,
+    PartyRoleName       VARCHAR(100)  NOT NULL
+);
+GO
+
+CREATE TABLE claims.DimIncidentType
+(
+    IncidentTypeKey     INT           NOT NULL,
+    IncidentTypeCode    VARCHAR(100)  NOT NULL,
+    IncidentTypeName    VARCHAR(250)  NOT NULL
+);
+GO
+
+CREATE TABLE claims.DimInjurySeverity
+(
+    InjurySeverityKey   INT           NOT NULL,
+    InjurySeverityCode  VARCHAR(50)   NOT NULL,
+    InjurySeverityName  VARCHAR(100)  NOT NULL,
+    SeverityRank        SMALLINT      NULL
+);
+GO
+
+CREATE TABLE claims.DimDamageExtent
+(
+    DamageExtentKey     INT           NOT NULL,
+    DamageExtentCode    VARCHAR(50)   NOT NULL,
+    DamageExtentName    VARCHAR(200)  NOT NULL,
+    ExtentRank          SMALLINT      NULL
+);
+GO
+
+CREATE TABLE claims.FactClaimFNOL
+(
+    ClaimFNOLKey                    BIGINT          NOT NULL,
+    ClaimReference                  VARCHAR(50)     NOT NULL,
+    PolicyKey                       BIGINT          NOT NULL,
+    LineOfBusinessKey               INT             NOT NULL,
+    SubmittedDateKey                INT             NOT NULL,
+    LossDateKey                     INT             NOT NULL,
+    LossLocationKey                 BIGINT          NOT NULL,
+    SourceChannelKey                INT             NOT NULL,
+    IncidentDescription             VARCHAR(8000)   NULL,
+    ClaimNotes                      VARCHAR(8000)   NULL,
+    SomeoneInjuredFlag              BIT             NOT NULL,
+    ThirdPartyPropertyDamagedFlag   BIT             NOT NULL,
+    AttorneyInvolvementKnownFlag    BIT             NULL,
+    VideoFootageExistsFlag          BIT             NULL,
+    VideoFootagePreservedFlag       BIT             NULL,
+    ReporterIsPrimaryContactFlag    BIT             NULL,
+    InjuredPersonCount              INT             NOT NULL,
+    DamagedPropertyItemCount        INT             NOT NULL,
+    ClaimCount                      INT             NOT NULL,
+    SubmittedAtUTC                  DATETIME2(6)    NOT NULL,
+    SourceRecordHash                BINARY(32)      NULL,
+    LoadBatchId                     VARCHAR(100)    NULL,
+    RecordCreatedUTC                DATETIME2(6)    NOT NULL
+);
+GO
+
+CREATE TABLE claims.BridgeClaimParty
+(
+    ClaimFNOLKey         BIGINT          NOT NULL,
+    PartyKey             BIGINT          NOT NULL,
+    PartyRoleKey         INT             NOT NULL,
+    IsPrimaryFlag        BIT             NOT NULL,
+    RoleSequenceNumber   SMALLINT        NOT NULL,
+    AllocationWeight     DECIMAL(9,6)   NULL
+);
+GO
+
+CREATE TABLE claims.BridgeClaimIncidentType
+(
+    ClaimFNOLKey          BIGINT         NOT NULL,
+    IncidentTypeKey       INT            NOT NULL,
+    IsPrimaryIncidentType BIT            NOT NULL,
+    AllocationWeight      DECIMAL(9,6)  NULL
+);
+GO
+
+CREATE TABLE claims.FactClaimInjury
+(
+    ClaimInjuryKey       BIGINT          NOT NULL,
+    ClaimFNOLKey         BIGINT          NOT NULL,
+    InjuredPartyKey      BIGINT          NOT NULL,
+    LossDateKey          INT             NOT NULL,
+    InjurySeverityKey    INT             NULL,
+    InjuryCount          INT             NOT NULL,
+    AgeAtLoss            SMALLINT        NULL,
+    InjuryDescription    VARCHAR(4000)   NULL,
+    RecordCreatedUTC     DATETIME2(6)    NOT NULL
+);
+GO
+
+CREATE TABLE claims.FactClaimPropertyDamage
+(
+    ClaimPropertyDamageKey  BIGINT         NOT NULL,
+    ClaimFNOLKey            BIGINT         NOT NULL,
+    PropertyOwnerPartyKey   BIGINT         NULL,
+    DamageExtentKey         INT            NULL,
+    PropertyType            VARCHAR(100)   NULL,
+    PropertyDescription     VARCHAR(1000)  NULL,
+    PropertyItemCount       INT            NOT NULL,
+    EstimatedDamageAmount   DECIMAL(18,2)  NULL,
+    RecordCreatedUTC        DATETIME2(6)   NOT NULL
+);
+GO
+
+CREATE TABLE claims.AuditClaimField
+(
+    ClaimReference       VARCHAR(50)    NOT NULL,
+    FieldKey             VARCHAR(200)   NOT NULL,
+    FieldLabel           VARCHAR(1000)  NULL,
+    FieldValueOrdinal    INT            NOT NULL,
+    FieldValue           VARCHAR(8000)  NULL,
+    SourceChannel        VARCHAR(50)    NULL,
+    UnanswerableFlag     BIT            NOT NULL,
+    OtherValue           VARCHAR(4000)  NULL,
+    RawValueType         VARCHAR(20)    NOT NULL,
+    IngestedAtUTC        DATETIME2(6)   NOT NULL
+);
+GO
+
+7. Example dimensional mapping
+Source field	Targetreference	FactClaimFNOL.ClaimReference
+submitted_at	SubmittedAtUTC, SubmittedDateKey
+line_of_business	DimLineOfBusiness
+policy_number	DimPolicy.PolicyNumber
+business_name	DimPolicy.BusinessName
+date_of_loss	FactClaimFNOL.LossDateKey
+loss_*	DimLocation
+reporter_*	DimParty plus Reporter bridge role
+primary_contact_*	DimParty plus Primary Contact bridge role
+injured_person_*	DimParty plus FactClaimInjury
+third_party_property_owner_*	DimParty plus property-owner role
+liability_incident_type.values[]	BridgeClaimIncidentType
+injury_severity	DimInjurySeverity
+third_party_damage_extent	DimDamageExtent
+incident_description	FactClaimFNOL.IncidentDescription
+notes	FactClaimFNOL.ClaimNotes
+Every fields[] entry	AuditClaimField
+8. Data-quality rules identified from the payload
+
+Create exceptions rather than silently resolving these conditions:
+
+Business-name inconsistency
+ Copper Kettle Bistor versus Copper Kettle Bistro.
+
+Surname inconsistency
+ Structured name is Nadia Whitfeld, while the email contains whitfield.
+
+Derived injury severity
+ “Moderate Injury” is present as a structured value but was not independently characterized by the reporter.
+
+Derived preferred language
+ “English” is present as a structured value but was not independently stated.
+
+Age-versus-DOB ambiguity
+ The field accepts age or DOB, and the supplied value is 34. Store it as AgeAtLoss, not as a date.
+
+Duplicate person roles
+ Regina Alvarez is both reporter and primary contact. Nadia Whitfeld is both injured person and property owner. Resolve each person once and assign multiple bridge roles.
+
+Payload-level versus nested LOB
+ Validate that root line_of_business equals payload.line_of_business. Quarantine the record if they disagree.
+
+9. Recommended semantic model relationships
+
+Use single-direction, one-to-many relationships from dimensions to facts:
+
+DimDate[DateKey]                 1 -> * FactClaimFNOL[LossDateKey]
+DimDate[DateKey]                 1 -> * FactClaimFNOL[SubmittedDateKey]
+DimPolicy[PolicyKey]             1 -> * FactClaimFNOL[PolicyKey]
+DimLocation[LocationKey]         1 -> * FactClaimFNOL[LossLocationKey]
+DimLineOfBusiness[LOBKey]        1 -> * FactClaimFNOL[LOBKey]
+
+FactClaimFNOL[ClaimFNOLKey]      1 -> * BridgeClaimParty[ClaimFNOLKey]
+DimParty[PartyKey]               1 -> * BridgeClaimParty[PartyKey]
+DimPartyRole[PartyRoleKey]       1 -> * BridgeClaimParty[PartyRoleKey]
+
+FactClaimFNOL[ClaimFNOLKey]      1 -> * BridgeClaimIncidentType[ClaimFNOLKey]
+DimIncidentType[IncidentTypeKey] 1 -> * BridgeClaimIncidentType[IncidentTypeKey]
+
+
+For DimDate, use role-playing views or duplicated semantic-model date dimensions for:
+
+Submission Date
+Loss Date
+
+This keeps report filtering predictable.
+
+10. Final recommendation
+
+Use FactClaimFNOL as the primary reporting fact, supported by FactClaimInjury and FactClaimPropertyDamage. Model parties once in a secured DimParty, then associate them to claims through role-based bridges. Preserve every original questionnaire response in AuditClaimField, but do not use the field-value structure as the main reporting model.
+
+This design provides:
+
+A clear and stable claim-level grain
+Support for multiple incident types
+Support for multiple parties and overlapping party roles
+PII isolation
+Historical policy and party changes
+Questionnaire schema evolution
+Source-to-curated traceability
+Straightforward Power BI reporting
+Design improvements
+
+The model separates analytically useful business entities from the dynamic questionnaire representation, prevents role-based party duplication, and explicitly preserves uncertain or conflicting source values instead of silently standardizing them.
