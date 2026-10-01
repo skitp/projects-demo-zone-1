@@ -1,0 +1,448 @@
+Proposed FNOL Ingestion Solution
+Executive Summary
+
+Leverage the existing Platform Ingestion Service to ingest FNOL JSON documents into a Raw/Bronze layer and use a configuration-driven mapping framework (YAML/JSON) to transform the semi-structured payload into the dimensional model.
+
+The solution supports both:
+
+Event-driven ingestion (storage event on file creation)
+Batch ingestion (scheduled processing)
+
+without requiring code changes for future FNOL questionnaire changes.
+
+Target Architecture
+                +------------------+
+                | FNOL Producer    |
+                +---------+--------+
+                          |
+                          | JSON File
+                          v
+                +------------------+
+                | Landing Storage  |
+                | (Blob / ADLS)    |
+                +---------+--------+
+                          |
+          +---------------+---------------+
+          |                               |
+          | Event Based                   | Batch Based
+          | (Blob Created Event)          | (Schedule)
+          v                               v
+  +----------------+             +----------------+
+  | Ingestion      |             | Ingestion      |
+  | Service        |             | Service        |
+  +--------+-------+             +--------+-------+
+           |                              |
+           +--------------+---------------+
+                          |
+                          v
+                +------------------+
+                | Raw / Bronze     |
+                | JSON Preservation|
+                +---------+--------+
+                          |
+                          |
+                          v
+                +------------------+
+                | Mapping Engine   |
+                | YAML / JSON      |
+                | Configuration    |
+                +---------+--------+
+                          |
+                          v
+              +-----------------------+
+              | Curated Star Schema   |
+              | Facts & Dimensions    |
+              +-----------------------+
+                          |
+                          v
+                     Power BI
+
+Ingestion Layers
+Raw Layer (Bronze)
+
+Store the original FNOL document exactly as received.
+
+Raw_FNOL
+Raw_FNOL
+---------
+FileName
+Reference
+LineOfBusiness
+SubmittedAtUtc
+PayloadJson
+MetadataJson
+FileReceivedUtc
+LoadBatchId
+SourceSystem
+
+Objectives
+Preserve original payload
+Support replay/reprocessing
+Enable schema evolution
+Retain auditability
+
+No business transformations occur in this layer.
+
+Configuration-Driven Mapping Framework
+
+Instead of hardcoding field extraction logic, maintain mappings in YAML or JSON.
+
+Example YAML Configuration
+source:
+  entity: fnol_claim
+
+grain:
+  target_fact: FactClaimFNOL
+  business_key: reference
+
+mappings:
+
+  - source: policy_number
+    target: DimPolicy.PolicyNumber
+
+  - source: business_name
+    target: DimPolicy.BusinessName
+
+  - source: date_of_loss
+    target: FactClaimFNOL.LossDateKey
+    transformation: date_key
+
+  - source: loss_state
+    target: DimLocation.StateName
+
+  - source: reporter_name
+    target: DimParty.FullName
+    role: REPORTER
+
+  - source: primary_contact_name
+    target: DimParty.FullName
+    role: PRIMARY_CONTACT
+
+  - source: injured_person_name
+    target: DimParty.FullName
+    role: INJURED_PERSON
+
+  - source: injury_severity
+    target: DimInjurySeverity.InjurySeverityName
+
+Multi-Value Attributes
+
+The model must support array-based values.
+
+Example:
+
+{
+  "key":"liability_incident_type",
+  "values":[
+     "slip_trip_fall",
+     "customer_or_visitor_injury",
+     "damage_to_others_property"
+  ]
+}
+
+
+Mapping configuration:
+
+- source: liability_incident_type
+  target: BridgeClaimIncidentType
+  cardinality: multi
+
+
+The ingestion framework automatically creates:
+
+Claim
+  -> Incident Type 1
+
+Claim
+  -> Incident Type 2
+
+Claim
+  -> Incident Type 3
+
+Dimension Processing Strategy
+DimParty
+
+The mapping engine should resolve duplicate parties before loading.
+
+Example:
+
+Reporter:
+
+Regina Alvarez
+303-555-0177
+regina@...
+
+
+Primary Contact:
+
+Regina Alvarez
+303-555-0177
+regina@...
+
+
+Single DimParty member:
+
+PartyKey = 1001
+
+
+Bridge records:
+
+Claim -> Reporter
+
+Claim -> Primary Contact
+
+DimLocation
+
+Generate a deterministic business hash:
+
+Address
+City
+State
+Zip
+
+
+Used for deduplication.
+
+DimPolicy
+
+Business key:
+
+PolicyNumber
+
+
+Supports SCD Type 2 when policy details evolve.
+
+Fact Population
+FactClaimFNOL
+
+Loaded once per FNOL.
+
+Derived measures:
+
+ClaimCount = 1
+
+
+Flags:
+
+SomeoneInjuredFlag
+VideoFootageExistsFlag
+AttorneyInvolvementFlag
+
+
+come directly from configuration mappings.
+
+FactClaimInjury
+
+Created when:
+
+someone_injured = Yes
+
+
+Config example:
+
+conditional_load:
+  source: someone_injured
+  equals: Yes
+
+FactClaimPropertyDamage
+
+Created when:
+
+third_party_property_damaged = Yes
+
+FactClaimFeedback
+
+Loaded from feedback payloads.
+
+Relationship:
+
+Claim Reference
+        |
+        +------> FactClaimFeedback
+
+
+Configuration:
+
+entity: feedback
+
+mappings:
+
+  - source: rating
+    target: FactClaimFeedback.RatingScore
+
+  - source: skipped_to_form
+    target: FactClaimFeedback.SkippedToFormFlag
+
+  - source: comment
+    target: FactClaimFeedback.FeedbackComment
+
+Event-Based Processing
+Recommended Default
+
+Producer drops file into storage.
+
+Example:
+
+/fnol/bop-liability/2026/09/08/file.json
+
+
+Storage event generated:
+
+Blob Created
+
+
+Event triggers Platform Ingestion Service.
+
+Flow:
+
+Blob Created
+    ↓
+Ingestion Service
+    ↓
+Validate JSON
+    ↓
+Persist Raw
+    ↓
+Apply Mapping Config
+    ↓
+Load Dimensions
+    ↓
+Load Facts
+
+Benefits
+Near real-time claims intake
+Lower latency
+Minimal operational effort
+Supports high claim volumes
+Batch Processing
+
+Supported when requested by Producer or Consumer.
+
+Examples:
+
+Hourly
+Daily
+Every 15 Minutes
+On Demand
+
+
+Flow:
+
+Scheduled Pipeline
+      ↓
+Scan Files
+      ↓
+Load Raw
+      ↓
+Apply Mapping
+      ↓
+Populate Model
+
+
+Configuration:
+
+ingestion_mode: batch
+
+schedule:
+  frequency: hourly
+
+Schema Evolution Support
+
+Questionnaires will inevitably change.
+
+Example
+
+New field appears:
+
+{
+  "key":"weather_conditions",
+  "value":"Rain"
+}
+
+
+No ingestion code changes required.
+
+Only mapping update:
+
+- source: weather_conditions
+  target: DimWeather.Condition
+
+
+or
+
+- source: weather_conditions
+  target: FactClaimFNOL.WeatherCondition
+
+
+This is one of the biggest advantages of a metadata-driven ingestion framework.
+
+Data Quality Layer
+
+Add configurable validation rules.
+
+Example:
+
+validations:
+
+  - field: policy_number
+    required: true
+
+  - field: date_of_loss
+    required: true
+
+  - field: reporter_email
+    format: email
+
+  - field: rating
+    range:
+      min: 1
+      max: 5
+
+
+Failed records routed to:
+
+FNOL_Quarantine
+
+
+with validation details.
+
+Recommended Metadata Tables
+CFG_Entity
+EntityName
+TargetFact
+BusinessKey
+EnabledFlag
+
+CFG_FieldMapping
+EntityName
+SourceField
+TargetObject
+TargetColumn
+RoleType
+TransformationRule
+RequiredFlag
+
+CFG_ValidationRule
+EntityName
+FieldName
+RuleType
+RuleExpression
+Severity
+
+
+This allows onboarding additional FNOL products without pipeline development.
+
+Recommended End-State
+
+Implement a metadata-driven FNOL ingestion framework on top of the existing Platform Ingestion Service:
+
+Raw/Bronze layer stores original JSON.
+YAML/JSON mapping configuration drives transformations.
+Event-based ingestion is the default pattern using Blob Created events.
+Batch ingestion remains available through configuration.
+Dimension and fact loading populate the curated star schema.
+Feedback payloads are ingested as a separate fact linked to the claim.
+Validation and quarantine provide operational control.
+Schema evolution is handled through configuration updates rather than code changes.
+
+This approach aligns well with your existing Common Ingestion pattern and keeps future FNOL questionnaire changes largely configuration-driven rather than requiring notebook or pipeline modifications.
