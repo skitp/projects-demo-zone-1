@@ -1,0 +1,61 @@
+
+        "source": "form"
+      },
+      {
+        "key": "injured_person_age_or_dob",
+        "label": "Age or date of birth",
+        "value": "62",
+        "values": null,
+        "source": "chat"
+      },
+      {
+        "key": "injury_severity",
+        "label": "Based on what you know today, how serious are the injuries?",
+        "value": "Moderate Injury",
+        "values": null,
+        "source": "chat"
+      },
+      {
+        "key": "third_party_property_damaged",
+        "label": "Was someone else's property damaged?",
+        "value": "No",
+        "values": null,
+        "source": "form"
+      },
+      {
+        "key": "video_footage_exists",
+        "label": "Is there video footage of the incident?",
+        "value": "Yes",
+        "values": null,
+        "source": "chat"
+      },
+      {
+        "key": "video_footage_preserved",
+        "label": "Has the video footage been saved?",
+        "value": "No, not yet",
+        "values": null,
+        "source": "chat"
+      },
+      {
+        "key": "special_circumstances",
+        "label": "Do any of these circumstances apply?",
+        "value": null,
+        "values": [
+          "none"
+        ],
+        "source": "form"
+      }
+    ],
+    "notes": "Injury details reported for Tobias Renfrew: he slipped on water tracked in near the front door at Foxglove Books and Coffee on Saturday, August 1, 2026, around 2:30 PM, and fell hard on the tiles. Reported injuries include a broken wrist; he was kept overnight for observation and is now home, with expectation of full recovery and no life-changing injury. Customer reported no other property damage and no damage to Tobias’s belongings. Customer also reported that the injured person’s address is 42 Larkmead Lane, Portland, Oregon 97202. Customer stated that Hollis and Vance wrote to the business on Monday saying they act for Tobias. CCTV over the front door likely captured the incident, but the footage has not yet been saved and is said to overwrite after about two weeks.",
+    "notes_source": "chat"
+  }
+}
+
+{
+  "reference": "GT-8cfd923e",
+  "line_of_business": "bop-liability",
+  "skipped_to_form": true,
+  "rating": 2,
+  "comment": "I gave the injured customer's address five times and it kept asking again. I had to give up on the chat and switch to the form.",
+  "submitted_at": "2026-08-07T11:10:21.276123+00:00"
+}
