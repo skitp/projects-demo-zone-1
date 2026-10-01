@@ -1,0 +1,209 @@
+The feedback payload should be modeled as a separate business process from FNOL submission, but linked to the claim through the claim reference.
+
+This allows you to answer questions such as:
+
+Average chatbot rating by LOB
+FNOL completion rate
+Skip-to-form rate
+Customer satisfaction by incident type
+Correlation between claim complexity and feedback scores
+Trending feedback over time
+Updated Star Schema
+                       DimDate
+                          |
+                          |
+                 FactClaimFeedback
+                          |
+                          |
+                    FactClaimFNOL
+                          |
+       +------------------+------------------+
+       |                                     |
+BridgeClaimParty                 BridgeClaimIncidentType
+       |                                     |
+    DimParty                         DimIncidentType
+
+Option 1 (Recommended): Separate Feedback Fact
+FactClaimFeedback
+
+Grain
+
+One row per feedback submission.
+
+This is the cleanest design because a claim can potentially receive:
+
+multiple feedback events
+post-chat surveys
+post-claim surveys
+NPS surveys
+follow-up surveys
+
+without altering the FNOL fact grain.
+
+Table Structure
+CREATE TABLE claims.FactClaimFeedback
+(
+    ClaimFeedbackKey      BIGINT         NOT NULL,
+    ClaimFNOLKey          BIGINT         NOT NULL,
+    ClaimReference        VARCHAR(50)    NOT NULL,
+
+    FeedbackDateKey       INT            NOT NULL,
+
+    LineOfBusinessKey     INT            NOT NULL,
+
+    SkippedToFormFlag     BIT            NOT NULL,
+
+    RatingScore           TINYINT        NULL,
+
+    FeedbackComment       VARCHAR(4000)  NULL,
+
+    FeedbackCount         INT            NOT NULL,
+
+    SubmittedAtUTC        DATETIME2(6)   NOT NULL,
+
+    SourceRecordHash      BINARY(32)     NULL,
+
+    RecordCreatedUTC      DATETIME2(6)   NOT NULL
+);
+
+DimFeedbackRating
+
+Optional if ratings become richer.
+
+CREATE TABLE claims.DimFeedbackRating
+(
+    RatingKey          INT           NOT NULL,
+    RatingScore        TINYINT       NOT NULL,
+    RatingGroup        VARCHAR(50)   NOT NULL,
+    Sentiment          VARCHAR(50)   NOT NULL
+);
+
+
+Example:
+
+Rating	Group	Sentiment1	Very Poor	Negative
+2	Poor	Negative
+3	Neutral	Neutral
+4	Good	Positive
+5	Excellent	Positive
+Mapping from Feedback Payload
+
+Source:
+
+{
+  "reference": "GT-d658adab",
+  "line_of_business": "bop-liability",
+  "skipped_to_form": true,
+  "rating": 3,
+  "comment": null,
+  "submitted_at": "2026-09-08T11:59:15.797075+00:00"
+}
+
+
+Maps to:
+
+FactClaimFeedback
+ClaimReference       = GT-d658adab
+
+ClaimFNOLKey         = lookup from FactClaimFNOL
+
+LineOfBusinessKey    = bop-liability
+
+SkippedToFormFlag    = 1
+
+RatingScore          = 3
+
+FeedbackComment      = NULL
+
+FeedbackCount        = 1
+
+SubmittedAtUTC       = 2026-09-08T11:59:15.797075Z
+
+FeedbackDateKey      = 20260908
+
+Relationship to Existing Facts
+FactClaimFNOL
+-----------------------------------
+ClaimFNOLKey
+ClaimReference
+
+            1
+            |
+            |
+            *
+FactClaimFeedback
+-----------------------------------
+ClaimFeedbackKey
+ClaimFNOLKey
+RatingScore
+SkippedToFormFlag
+
+
+This creates:
+
+Claim GT-d658adab
+    |
+    +-- FNOL submission
+    |
+    +-- Feedback response
+
+Useful Measures
+Claims Submitted
+Claims Submitted =
+SUM ( FactClaimFNOL[ClaimCount] )
+
+Feedback Responses
+Feedback Responses =
+SUM ( FactClaimFeedback[FeedbackCount] )
+
+Average Rating
+Average Rating =
+AVERAGE ( FactClaimFeedback[RatingScore] )
+
+Form Skip %
+Form Skip % =
+DIVIDE(
+    CALCULATE(
+        COUNTROWS(FactClaimFeedback),
+        FactClaimFeedback[SkippedToFormFlag] = TRUE()
+    ),
+    COUNTROWS(FactClaimFeedback)
+)
+
+Response Rate
+Response Rate % =
+DIVIDE(
+    COUNTROWS(FactClaimFeedback),
+    COUNTROWS(FactClaimFNOL)
+)
+
+Additional Audit Support
+
+Add a second audit table for non-claim events:
+
+CREATE TABLE claims.AuditFeedbackPayload
+(
+    ClaimReference      VARCHAR(50)   NOT NULL,
+    RatingScore         TINYINT       NULL,
+    SkippedToFormFlag   BIT           NOT NULL,
+    FeedbackComment     VARCHAR(4000) NULL,
+    SubmittedAtUTC      DATETIME2(6)  NOT NULL,
+    RawJsonPayload      VARCHAR(MAX)  NOT NULL
+);
+
+Final Recommendation
+
+Keep the existing model unchanged and add:
+
+FactClaimFeedback (new fact table)
+Optionally DimFeedbackRating
+AuditFeedbackPayload for lineage
+
+The resulting dimensional model contains two related fact tables:
+
+FactClaimFNOL → claim intake event
+FactClaimFeedback → customer feedback event
+
+linked through the common claim (ClaimFNOLKey / ClaimReference).
+
+This preserves proper grain, supports multiple feedback submissions per claim in the future, and enables FNOL experience analytics without polluting the claim fact with survey-specific attributes.
