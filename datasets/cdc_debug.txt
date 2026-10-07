@@ -1,3 +1,28 @@
+SELECT session_id, start_time, end_time, scan_phase,
+       error_count, start_lsn, current_lsn, end_lsn,
+       last_commit_time, tran_count, command_count
+FROM sys.dm_cdc_log_scan_sessions
+ORDER BY session_id DESC;
+
+SELECT session_id, entry_time, error_number, error_severity,
+       error_state, error_message, start_lsn, sequence_value
+FROM sys.dm_cdc_errors
+ORDER BY entry_time DESC;
+
+SELECT MAX(tran_end_time) AS last_captured_commit
+FROM cdc.lsn_time_mapping;
+
+SELECT session_id, entry_time, error_number, error_severity,
+       error_state, error_message, start_lsn, sequence_value
+FROM sys.dm_cdc_errors
+ORDER BY entry_time DESC;
+
+SELECT TOP 20 session_id, start_time, end_time, scan_phase,
+       error_count, last_commit_time, tran_count, command_count
+FROM sys.dm_cdc_log_scan_sessions
+ORDER BY session_id DESC;
+
+
 DateTimeLsn	__$operation	__$start_lsn	__$command_id	__$seqval
 2026-10-05 11:34:46.403	2	0x007341CD000326280001	18	0x007341CD00031AC80079
 2026-10-05 11:34:46.403	1	0x007341CD000326280001	4	0x007341CD00031AC80037
