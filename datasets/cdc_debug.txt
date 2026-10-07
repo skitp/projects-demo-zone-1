@@ -1,0 +1,23 @@
+DateTimeLsn	__$operation	__$start_lsn	__$command_id	__$seqval
+2026-10-05 11:34:46.403	2	0x007341CD000326280001	18	0x007341CD00031AC80079
+2026-10-05 11:34:46.403	1	0x007341CD000326280001	4	0x007341CD00031AC80037
+2026-10-05 11:34:38.170	2	0x007341CD000292800003	18	0x007341CD00028D580065
+2026-10-05 11:34:38.170	1	0x007341CD000292800003	4	0x007341CD00028D58001E
+2026-10-05 11:34:29.057	2	0x007341CD000223A80001	13	0x007341CD00021ED00008
+
+  select 
+sys.fn_cdc_map_lsn_to_time(__$start_lsn) as DateTimeLsn,
+[__$operation], [__$start_lsn] , __$command_id , __$seqval  FROM [cdc].[dbo_wcpayrol_CT] 
+where 
+[__$operation] IN (1, 2, 4) 
+and code = 'A9PT603195'
+and primeseq = 3
+and state= 'SC'
+and effdate = '8/1/2025'
+and seqcode	= 200
+and classcode = 900
+and rateeffdate = '8/1/2025'
+and volcomp	IS NULL
+and territory = 0
+ORDER BY 
+[__$start_lsn] DESC, __$command_id DESC, __$seqval DESC
