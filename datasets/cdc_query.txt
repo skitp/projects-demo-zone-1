@@ -1,0 +1,7 @@
+WITH LatestChanges AS (
+SELECT [code],[type],[locnum],[revnum],[lowdate],[highdate],[text],[uselocnum],[address1],[address2],[city],[state],[zipcode],[county],[title],[parttime],__$operation,__$start_lsn,__$command_id,
+ROW_NUMBER() OVER (PARTITION BY code,loctypenum,uselocnum ORDER BY [__$start_lsn] DESC, __$command_id DESC) AS rn                   
+FROM [cdc].[dbo_wclocnam_CT]
+WHERE [__$operation] IN (1, 2, 4) AND __$start_lsn >= 0x00734735000e6fc00004) 
+SELECT [code],[type],[locnum],[revnum],[lowdate],[highdate],[text],[uselocnum],[address1],[address2],[city],[state],[zipcode],[county],[title],[parttime],__$operation,__$start_lsn,__$command_id
+FROM LatestChanges WHERE rn = 1
