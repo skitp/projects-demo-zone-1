@@ -1,3 +1,13 @@
+ERROR: 2026-10-12 17:06:06,134: 418: strategy: ingest: Error during merge ingest: 'function' object has no attribute 'columns'
+2026-10-12 17:06:06 | ERROR    | Error during merge ingest: 'function' object has no attribute 'columns'
+ERROR [2026-10-12 17:06:06,135] [ingest.wclocnam] start_ingest:435 - Ingestion failed: 'function' object has no attribute 'columns'
+Traceback (most recent call last):
+  File "/home/trusted-service-user/cluster-env/trident_env/lib/python3.11/site-packages/spark_engine/ingestion/ingest.py", line 413, in start_ingest
+    self._load_type.ingest(self._source_data)
+  File "/home/trusted-service-user/cluster-env/trident_env/lib/python3.11/site-packages/spark_engine/ingestion/strategy.py", line 320, in ingest
+    .select(*[c for c in self._candidate_keys if c in source_data.columns])
+
+
 SELECT session_id, start_time, end_time, scan_phase,
        error_count, start_lsn, current_lsn, end_lsn,
        last_commit_time, tran_count, command_count
