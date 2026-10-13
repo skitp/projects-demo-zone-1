@@ -1,3 +1,10 @@
+Core Technical Strengths (add a new bullet):
+
+Python library development: Designs, packages, and versions internal Python libraries and Spark utility modules (ingestion frameworks, Delta metadata/governance helpers, role and security managers, monitoring utilities). Emphasizes production readiness—type hints, logging, error handling, configuration-driven behavior, unit/integration testing, and clear READMEs—so notebooks stay thin and teams share consistent, maintainable code.
+Representative Experience (add one bullet):
+
+Built and iterated production Python libraries and notebook modules used across multiple Fabric workspaces, including standardized Delta ingestion classes (with governance metadata and TBLPROPERTIES support), OneLake data-access role management utilities, and reusable optimization/maintenance helpers. Focused on thread-safety, validation, secrets handling, and documentation so the libraries could be adopted by other engineers without constant support.
+
 **Candidate Profile: Senior Data Engineer — Microsoft Fabric & Spark Optimization**
 
 **Professional Summary**  
