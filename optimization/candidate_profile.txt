@@ -1,0 +1,22 @@
+**Candidate Profile: Senior Data Engineer — Microsoft Fabric & Spark Optimization**
+
+**Professional Summary**  
+Senior Data Engineer with production experience designing, optimizing, and operating large-scale Spark workloads on Microsoft Fabric. Strong in Delta Lake performance (liquid clustering, OPTIMIZE, file sizing, incremental merges), Spark UI-driven troubleshooting (skew, spill, OOM, shuffle), and Fabric capacity economics (CU-seconds, bursting, smoothing, throttling stages, pool and node sizing). Builds reliable, cost-aware pipelines that stay inside capacity limits while meeting SLAs for both interactive and batch workloads.
+
+**Core Technical Strengths**
+
+- **Spark load optimization & troubleshooting**: Stage-level diagnosis (task duration histograms, shuffle skew, spill), AQE, broadcast vs shuffle joins, predicate pushdown, salting only when proven, driver vs executor memory pressure, Python UDF cost.
+- **Delta Lake & Fabric lakehouse**: Liquid clustering vs classic partitioning + Z-order, target file size, small-file mitigation, V-order for Direct Lake, statistics, VACUUM retention vs time travel, idempotent incremental MERGE patterns with watermarks and quarantine.
+- **Fabric capacity & compute**: CU-second accounting, 10 min / 60 min / 24 h throttling windows (overage protection → interactive delay → interactive rejection → background rejection), carryforward and burndown, starter vs custom vs custom live pools, node sizing (Small through XX-Large) and its effect on max node count, autoscale and dynamic allocation, single-node resource sharing, CU budgeting across concurrent jobs.
+- **Operational design**: Separating interactive, scheduled, and heavy batch workloads; hard caps on pool max nodes; capacity isolation strategies; monitoring via Capacity Metrics app and Spark resource usage UI; maintenance pipelines (OPTIMIZE timing, statistics).
+
+**Representative Experience**
+
+- Owned nightly and intra-day Spark jobs on Fabric lakehouses processing hundreds of millions to multi-billion row Delta tables. Reduced a full-overwrite job from 90+ minutes back to ~12–15 minutes by eliminating tiny files, aligning liquid clustering to filter columns, switching to incremental MERGE with partition/cluster-key predicates, and right-sizing the custom pool (Large nodes, controlled autoscale) instead of simply increasing capacity.
+- Diagnosed and resolved recurring executor losses and OOMs that appeared only on the largest partitions. Used Spark UI skew metrics and spill counters to distinguish data skew from memory pressure and UDF cost; applied AQE skew handling, selective salting, and a move from Medium to Large nodes while lowering max nodes so the job no longer exhausted the F64 burst ceiling.
+- Designed pool and capacity layout for a shared F64: starter pool for development (high concurrency, low max nodes), custom pool with tight max for 15-minute interactive ETL, and a separate custom pool (Large/XL, autoscale bounded by observed parallelism) for the nightly multi-TB merge. Implemented CU-second budgeting and job staggering so background smoothing did not push the capacity into interactive rejection during business hours.
+- Built production incremental ingestion from ADLS into Delta with natural-key MERGE, late-arriving data handling, and exactly-once rerun behavior. Added post-load maintenance (targeted OPTIMIZE, statistics refresh) so SQL endpoint and Direct Lake consumers stayed fast without manual intervention.
+- Troubleshot capacity throttling incidents where average utilization looked healthy (<50%) but new interactive work was delayed or rejected. Traced the issue to smoothed background debt filling the 10- and 60-minute windows; adjusted pool limits, moved heavy Spark to a dedicated capacity, and documented the difference between backward-looking utilization and forward-looking CU-second consumption.
+
+**Working Style**  
+Starts with measurement (Spark UI, Capacity Metrics, file-level Delta stats) before changing infrastructure. Prefers code and configuration changes that reduce shuffled bytes and future CU-second debt over “make the pool bigger.” Documents pool sizing rationale, throttling risks, and maintenance expectations so the next engineer can operate the system. Comfortable explaining capacity behavior to both engineering and platform teams.
