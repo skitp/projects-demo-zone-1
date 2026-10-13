@@ -1,0 +1,27 @@
+**ADO Task: Support Mutable Candidate Keys in CDC Merge**
+
+**Title:** CDC merge – handle primary-key updates (ops 1/2/3/4)  
+**Type:** User Story / Task  
+**Priority:** High  
+**Estimate:** 5 story points (≈ 3–4 dev days)
+
+### Scope
+- Add `mutable_candidate_keys` flag to `configure_load`.
+- Implement `_ingest_cdc_mutable_keys`:
+  - Latest op 1/3 per key → soft-delete.
+  - Latest op 2/4 per key → upsert (with reactivation).
+- Keep existing immutable CDC path unchanged.
+- Update CDC extract query template to include op 3 when flag is true.
+- Unit/integration tests with the provided `base_trans` / `cdc_trans` sample plus a mixed immutable/mutable case.
+- Update logging and unmatched-key diagnostic to note mutable-key path.
+- Brief runbook note + RCA link.
+
+### Acceptance Criteria
+- Mutable-key table ends with exactly the active keys in `base_trans.csv` and old keys soft-deleted.
+- Immutable-key tables behave exactly as before.
+- No regression in non-CDC merge, overwrite, or append paths.
+- Diagnostic table still populated for unmatched keys.
+
+### Out of Scope
+- Changing source application to forbid PK updates.
+- Full snapshot reconciliation job.
