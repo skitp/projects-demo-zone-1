@@ -1,0 +1,22 @@
+flowchart TD
+    A[CDC Change Table] -->|Query: ops 1,2,3,4<br/>latest per key by LSN| B[source_data]
+    
+    B --> C{Partition by<br/>candidate keys}
+    C --> D[Latest op per key]
+    
+    D --> E{__operation}
+    E -->|1 or 3| F[to_delete]
+    E -->|2 or 4| G[to_upsert]
+    
+    F --> H[MERGE 1: Soft-delete<br/>dl_isdeleted=1<br/>dl_iscurrent=0]
+    G --> I[MERGE 2: Upsert<br/>matched → update + reactivate<br/>not matched → insert]
+    
+    H --> J[Target Delta Table]
+    I --> J
+    
+    J --> K[Active rows<br/>dl_iscurrent=1]
+    
+    style F fill:#f9d0d0
+    style G fill:#d0f9d0
+    style H fill:#f9d0d0
+    style I fill:#d0f9d0
