@@ -1,26 +1,25 @@
-def create_dataset_files(mode: Literal["cdc", "incremental"] = "incremental") -> None:
+def create_dataset_files(mode: Literal["cdc", "incremental", "full"] = "incremental") -> None:
     """
     Generate per-dataset JSON configuration files for IIS source datasets.
-
-    Supports two modes:
-      - "cdc"         → CDC ingest (subfolder: iis_cdc)
-      - "incremental" → watermark or full load (subfolder: iis_base)
-
+    Supports three modes:
+      - "cdc"         → CDC ingest (subfolder: his_cdc)
+      - "incremental" → watermark or full load based on columns (subfolder: his_cdc)
+      - "full"        → force full historical load with overwrite (subfolder: iis_base)
+                        Only filter_expression is honored; watermarks are ignored.
     Metadata sources:
       - source_dataset_column_list
       - source_dataset_pk_list / source_dataset_list
       - source_dataset_request (+ cdc_dataset_list_crqry for CDC mode)
       - table_ext_properties_crqry (ms_description + domain_owner)
-
     Only datasets with status = 'initiated' in source_dataset_request are processed.
-
     Returns:
         None. Writes one JSON file per dataset under {datasets_path}/{subfolder}/.
     """
-    if mode not in ("cdc", "incremental"):
-        raise ValueError(f"mode must be 'cdc' or 'incremental', got '{mode}'")
+    if mode not in ("cdc", "incremental", "full"):
+        raise ValueError(f"mode must be 'cdc', 'incremental', or 'full', got '{mode}'")
 
-    dataset_subfolder = "iis_cdc" if mode == "cdc" else "iis_base"
+    # cdc + incremental → his_cdc ; full → iis_base
+    dataset_subfolder = "his_cdc" if mode in ("cdc", "incremental") else "iis_base"
     logger.info(f"Starting dataset config generation in mode='{mode}' → subfolder '{dataset_subfolder}'")
 
     # ------------------------------------------------------------------
@@ -57,7 +56,7 @@ def create_dataset_files(mode: Literal["cdc", "incremental"] = "incremental") ->
             WHERE sdr.status = 'initiated'
         """
         logger.info(f"Loading CDC-initiated datasets from {dl_table_path_cdc}")
-    else:  # incremental
+    else:  # incremental or full
         query = f"""
             SELECT
                 sdr.database_name,
@@ -70,7 +69,7 @@ def create_dataset_files(mode: Literal["cdc", "incremental"] = "incremental") ->
                 AND sdr.table_name    = sdl.dataset_name
             WHERE sdr.status = 'initiated'
         """
-        logger.info(f"Loading incremental-initiated datasets from {dl_table_path_sdr}")
+        logger.info(f"Loading {mode}-initiated datasets from {dl_table_path_sdr}")
 
     request_df: DataFrame = spark.sql(query)
     datasets_to_process: List[Row] = (
@@ -149,11 +148,14 @@ def create_dataset_files(mode: Literal["cdc", "incremental"] = "incremental") ->
         if mode == "cdc":
             ingest_type: Optional[str] = "cdc"
             watermark_id: Optional[str] = None
-        else:
+        elif mode == "full":
+            # Force full historical load — ignore watermark columns
+            ingest_type = "full"
+            watermark_id = None
+        else:  # incremental
             lower_columns = [c.lower().strip("[]") for c in columns]
             has_updateon  = "updateon"  in lower_columns
             has_enteredon = "enteredon" in lower_columns
-
             if has_updateon or has_enteredon:
                 ingest_type = "watermark"
                 if has_updateon and has_enteredon:
@@ -189,7 +191,6 @@ def create_dataset_files(mode: Literal["cdc", "incremental"] = "incremental") ->
             .select("primary_key_list", "duplicateCheckEnabled")
             .first()
         )
-
         primary_key_list: List[str] = []
         if pk_row and pk_row["primary_key_list"]:
             try:
@@ -212,10 +213,14 @@ def create_dataset_files(mode: Literal["cdc", "incremental"] = "incremental") ->
             if pk_row and pk_row["duplicateCheckEnabled"] is not None
             else False
         )
-        # ---- target load type ----
-        target_load_type = "merge" if primary_key_list and ingest_type != "full" else "overwrite"
 
-         # ---- extended properties + domain owner ----
+        # ---- target load type ----
+        if mode == "full":
+            target_load_type = "overwrite"
+        else:
+            target_load_type = "merge" if primary_key_list and ingest_type != "full" else "overwrite"
+
+        # ---- extended properties + domain owner ----
         exp_row = (
             exp_dataset_df
             .filter(
@@ -225,10 +230,8 @@ def create_dataset_files(mode: Literal["cdc", "incremental"] = "incremental") ->
             )
             .first()
         )
-
         description: Optional[str] = None
         domain_owner: Optional[str] = None
-
         if exp_row:
             description  = exp_row["extended_property_value"]
             domain_owner = exp_row["domain_owner"]
