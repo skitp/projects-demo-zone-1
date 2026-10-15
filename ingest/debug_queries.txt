@@ -1,0 +1,31 @@
+The ordinary-update case is fixed. The remaining drift (target active count slightly higher than the live source) is the original PK-update / missed-delete pattern showing up on other keys.
+Most likely causes for the excess rows
+
+Primary-key change where the before-image (op 3) was not in the CDC batch
+The new key was inserted (op 4), but the old key was never soft-deleted.
+Delete that never arrived in CDC
+Insert or update was applied, then the row was removed in the source by a non-CDC operation (or the delete LSN fell outside the extract window).
+Key representation mismatch
+Same logical key, but trim/cast/null differences so the soft-delete didn’t match the existing target row.
+
+Find the exact excess keys
+  -- Active keys in target that are absent from the live source
+SELECT t.*
+FROM target t
+LEFT JOIN live_source s
+  ON  t.code       = s.code
+  AND t.loctypenum = s.loctypenum
+  AND t.uselocnum  = s.uselocnum
+WHERE t.dl_iscurrent = 1          -- or dl_isdeleted = 0
+  AND s.code IS NULL;
+For each excess key, check the CDC history:
+SELECT __$operation, __$start_lsn, __$command_id, __$seqval, *
+FROM cdc.dbo_wclocnam_CT
+WHERE code = '<excess_code>'
+  AND loctypenum = '<excess_loctypenum>'
+  AND uselocnum  = '<excess_uselocnum>'
+ORDER BY __$start_lsn, __$command_id, __$seqval;
+
+If you see only op 2/4 and no later op 1 or op 3 → missed delete or PK-change before-image.
+If you see op 3/1 but the target row is still current → the soft-delete didn’t match (key normalization issue).
+  Paste 2–3 of those excess keys plus their CDC history and I can tell you whether we need a small additional guard in the merge or whether a periodic reconciliation (soft-delete target keys missing from a current source snapshot) is the practical fix.
