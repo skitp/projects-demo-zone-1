@@ -1,0 +1,12 @@
+Thanks for sharing. In principle, Domain DEs already follow the expectation that Platform-owned code should not be modified or independently maintained, so I view this as useful awareness/onboarding reinforcement.
+ 
+That said 😊, today Domains still have to intake/merge Platform code into Domain Git, which inherently leaves room for modification, drift, or interpretation, and also takes meaningful time from Domain teams to merge and test Platform changes.
+ 
+I’d like us to align on solving this more through engineering controls (PaaS) than another process to follow and manage. The target model needs to be (as requested & attached)
+<< Shift Stability Left: Platform-as-a-Service Consumption Model >>
+Domains consume Platform capabilities as bundled, versioned services - like the PaaS model I shared, or like accessing a REST API - through approved contracts, configs, and parameters, with no DE opportunity or privilege to modify the underlying Platform code. This would prevent even accidental modification and fully decouple Platform services from any Domain need to merge Platform code.
+Platform services are tested end-to-end before release using Data Engineer-equivalent privileges in a Domain-like environment, against a critical Data Product codebase such as CPDP. This would validate the service under realistic Domain usage conditions before broader rollout.
+ 
+With 11 DEs coming on board shortly, I’d rather we engineer the control by design than add another Do/Don’t list 😊.
+ 
+The team already has plenty to manage, and a bundled-service PaaS model would remove the risk of accidental Platform code changes altogether.
