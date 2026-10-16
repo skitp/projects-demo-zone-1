@@ -1,12 +1,59 @@
-Thanks for sharing. In principle, Domain DEs already follow the expectation that Platform-owned code should not be modified or independently maintained, so I view this as useful awareness/onboarding reinforcement.
- 
-That said 😊, today Domains still have to intake/merge Platform code into Domain Git, which inherently leaves room for modification, drift, or interpretation, and also takes meaningful time from Domain teams to merge and test Platform changes.
- 
-I’d like us to align on solving this more through engineering controls (PaaS) than another process to follow and manage. The target model needs to be (as requested & attached)
-<< Shift Stability Left: Platform-as-a-Service Consumption Model >>
-Domains consume Platform capabilities as bundled, versioned services - like the PaaS model I shared, or like accessing a REST API - through approved contracts, configs, and parameters, with no DE opportunity or privilege to modify the underlying Platform code. This would prevent even accidental modification and fully decouple Platform services from any Domain need to merge Platform code.
-Platform services are tested end-to-end before release using Data Engineer-equivalent privileges in a Domain-like environment, against a critical Data Product codebase such as CPDP. This would validate the service under realistic Domain usage conditions before broader rollout.
- 
-With 11 DEs coming on board shortly, I’d rather we engineer the control by design than add another Do/Don’t list 😊.
- 
-The team already has plenty to manage, and a bundled-service PaaS model would remove the risk of accidental Platform code changes altogether.
+Subject: Re: Platform DE Service Usage Contract — Alignment on PaaS direction
+
+Thanks for the thoughtful feedback. The target state you describe — Domains consuming Platform capabilities as versioned, sealed services through contracts, configs, and parameters, with no ability or need to modify Platform source — is the right end state, and it is consistent with the intent of the contract.
+
+A few points where the current framing understates both the problem and the role of the document:
+
+**The merge practice you describe is the problem the contract is meant to stop, not a stable baseline.**  
+If Domain Git today still contains Platform pipelines, notebooks, libraries, or CI/CD templates that must be merged and can be altered, that is unmanaged drift, not a supported consumption model. The contract formalizes the expectation you already stated (Platform-owned code is not modified) and removes the ambiguity that lets “intake/merge” become an invitation to edit. Treating the document as optional awareness while the merge path remains open leaves the risk in place for the 11 new DEs.
+
+**Engineering controls and a clear contract are complementary, not alternatives.**  
+A true PaaS model (sealed packages, no source in Domain repos, config-only extension points, protected Fabric items, CI that rejects forks) is the durable control. Building it takes time. In the interim, and even after it lands, Domains still need:
+- an explicit statement of what they may and may not touch,
+- defined extension points so they know the approved path instead of inventing one,
+- a support boundary so Platform can stand behind unmodified services,
+- a lightweight intake path for genuine capability gaps.
+
+Without that, “use the service correctly” remains tribal knowledge. The contract is the interface specification of the PaaS, not an extra process layered on top of it.
+
+**End-to-end Platform testing against a Domain-like environment (e.g., CPDP) is necessary but not sufficient.**  
+Validating the service under realistic privileges before release is good practice and should be part of the Platform release criteria. It does not replace Domain responsibility for their own configuration, business logic, data contracts, and product correctness. Platform testing reduces the chance that a published version is broken; it does not eliminate the need for Domains to consume the published version rather than a local variant.
+
+**Onboarding 11 DEs increases, rather than decreases, the value of an unambiguous written contract.**  
+A perfect technical control is preferable, but it will not be in place before those people arrive. A short, clear operating agreement reduces the chance that new engineers treat existing merge habits as the expected model. Once the PaaS controls are live, the same document continues to serve as the human-readable contract that the technical controls enforce.
+
+**Suggested path forward**  
+1. Treat the contract as the interim and enduring governance layer.  
+2. Prioritize the engineering work that removes Platform source from Domain Git and eliminates write access to Platform-managed Fabric items and packages (the actual PaaS controls).  
+3. Update the contract’s extension-point and source-of-truth sections once those controls exist, so the document and the technical reality stay aligned.  
+4. Use the Platform testing practice you outlined as a release gate for services that Domains consume.
+
+The document is not intended to be the long-term control; it is the shared definition of the control we are engineering. Happy to walk through specific sections against the current Domain Git and Fabric reality so we can separate what is already true from what still needs to be closed by design.
+
+Second versin:
+Subject: Re: Platform DE Service Usage Contract — Aligning on the PaaS path
+
+Thanks for the clear feedback — the direction you’re describing is exactly the target state we want to reach: Domains consuming Platform capabilities as versioned services through configs and parameters, with no practical way (or need) to modify the underlying code.
+
+A couple of clarifications that may help us stay aligned as we move toward that model:
+
+The current practice of Domains pulling Platform code into their Git repos is the main source of the drift and merge overhead you mentioned. The contract is meant to close that gap by making the “consume, don’t modify” expectation explicit while we engineer the technical controls that make modification impossible. It isn’t intended as an additional process on top of the merge model; it’s the shared definition of what “consuming the service” means so teams (including the 11 new DEs) have a consistent reference.
+
+Engineering controls (sealed packages, no Platform source in Domain repos, protected Fabric items, CI checks that reject forks) are the durable solution, and we should prioritize them. The contract supports that work rather than competing with it: it documents the approved extension points and the support boundary so that, once the technical controls are in place, everyone is already operating to the same rules. Even after the PaaS model is live, some lightweight agreement on ownership, compatibility, and how to request new capabilities remains useful.
+
+Your suggestion to test Platform services end-to-end in a Domain-like environment (e.g., against CPDP with DE-equivalent privileges) before release is a strong addition to the release process. It reduces the risk that a published version behaves differently under real Domain usage. Domains would still validate their own configurations and business logic, but Platform would carry more of the integration risk up front.
+
+Given the upcoming onboarding, it may be useful to keep a short, clear reference available now, while we schedule the engineering work that removes the merge step entirely. Once those controls exist, we can update the contract so it simply describes the technical reality rather than compensating for gaps.
+
+Would it be helpful to walk through the current Domain Git and Fabric setup together and identify the specific changes that would eliminate the need for Domains to merge Platform code? That would let us sequence the PaaS work against the contract sections that should change once the controls are in place.
+
+-- third version:
+Subject: Re: Platform DE Service Usage Contract
+
+Thanks — the PaaS direction you’re describing is the right one, and we should get there.
+
+The main gap today is that Domains still pull Platform code into their repos and merge it. That creates the drift and extra work you mentioned. The contract is mostly there to make the “don’t modify Platform code” rule clear while we remove that merge step entirely with better controls (sealed packages, no source in Domain Git, etc.).
+
+I’d rather not wait for the perfect technical setup before giving the new DEs a simple reference. At the same time, the engineering work to stop the merge is the real fix, and we should prioritize it.
+
+Happy to sit down and map what needs to change in the current repos and pipelines so Domains stop having to touch Platform code at all. Let me know if that would be useful.
