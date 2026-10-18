@@ -1,0 +1,24 @@
+Extension of SIL with separate sensitive-data pathways for Restricted, Sensitive PII, Sensitive PHI, and Sensitive Financial/PFI data
+
+Executive Context
+This requirements document defines the business, governance, security, operational, and architecture requirements for extending the Shared Ingestion Layer Service to handle Sensitive Data Requests from DnA domains and other organizational departments. The extension must preserve the core SIL principle of “ingest once, govern once, secure once, consume many,” while introducing separate sensitive-data pathways that prevent unauthorized exposure and maintain classification-based controls across ingestion, curation, data product, and downstream consumption layers.
+
+The current SIL pattern supports approved Public, Private, and Restricted data using platform-managed ingestion, Delta publication, OneLake Security, and domain shortcuts. Sensitive PII and Sensitive PHI must not follow the standard SIL publication pattern and must be handled through separately approved Platform-managed pathways. Sensitive Financial/PFI data remains excluded from SIL and downstream Fabric assets unless a formal policy change and Security/Compliance approval occur before design or movement begins.
+
+Please see the attached word document with the following:
+
+Section A: Formal BRD/Requirements Document, including:
+
+Business objective
+Scope and exclusions
+Business requirements
+Sensitive data intake workflow
+RACI and decision rights
+Section B: Solution Architecture Requirements Pack, including:
+
+Target architecture concept
+Classification-to-pathway decision matrix
+Functional and non-functional requirements
+Stage gates and acceptance criteria
+User stories
+Testing and UAT requirements
