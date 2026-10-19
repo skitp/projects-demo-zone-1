@@ -1,0 +1,14 @@
+{
+    "query": "WITH LatestChanges AS (\n                SELECT  [code],[type],[locnum],[revnum],[lowdate],[highdate],[text],[uselocnum],__$operation,__$start_lsn,__$seqval, \n
+  ROW_NUMBER() OVER (PARTITION BY code,loctypenum,uselocnum ORDER BY [__$seqval] DESC) AS rn \n                
+  FROM [cdc].[dbo_wclocnam_CT] \n                WHERE [__$operation] IN (1, 2, 4) AND __$start_lsn > 0x0\n            )\n            SELECT [code],[type],[locnum],[revnum],[lowdate],[highdate],[text],[uselocnum],[address1],[address2],[city],[state],[zipcode],[county],[title],[parttime],[fulltime],[sttin],[biztype],[biztypex],[enteredon],[enteredby],[updateon],[updateby],[renewoflocnum],[locytdprem],[locstfees],[classcode],[exposure],[rate],[sttintype],[firstname],[lastname],[loctypenum],[latitude],[longitude],[geostatus],[geoage],TRIM([gender]) AS [gender],TRIM([maritalstatus]) AS [maritalstatus],[plindustry],[occupation],__$operation,__$start_lsn,__$seqval FROM LatestChanges WHERE rn = 1",
+    "sourceWatermarkIdentifier": "__$start_lsn",
+    "watermarkValue": "0x00734b650000b5080101"
+}
+{
+  "query": "SELECT\n            [code],[type],[locnum],[revnum],[lowdate],[highdate],[text],[uselocnum],None AS dl_watermark\n        
+  FROM dbo.wclocnam\n        WHERE None > CAST('0x00734b650000b5080101' AS datetime2)",
+  "sourceWatermarkIdentifier": null,
+  "watermarkValue": "0x00734b650000b5080101"
+}
+}
