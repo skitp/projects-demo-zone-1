@@ -3,28 +3,36 @@ import json
 from typing import Optional
 
 def _clean_filter_expression(self, expr: Optional[str]) -> str:
-    """
-    Strip a leading WHERE / AND (case-insensitive) and return a clean condition.
-    Empty / None → empty string.
-    """
+    """Strip leading WHERE/AND (case-insensitive)."""
     if not expr or not isinstance(expr, str):
         return ""
-    cleaned = re.sub(r"^\s*(WHERE|AND)\s+", "", expr.strip(), count=1, flags=re.IGNORECASE)
-    return cleaned.strip()
+    return re.sub(
+        r"^\s*(WHERE|AND)\s+", "", expr.strip(), count=1, flags=re.IGNORECASE
+    ).strip()
+
+
+def _resolve_lsn_column(self) -> Optional[str]:
+    """Return the actual LSN column name present in the DataFrame, or None."""
+    cols = set(self._source_data.columns)
+    for candidate in ("__$start_lsn", "__start_lsn"):
+        if candidate in cols:
+            return candidate
+    return None
 
 
 def update_watermark_query(self) -> None:
     """Update watermark query file for incremental or CDC processing."""
-    # Determine watermark column based on ingest type
-    watermark_column = (
-        "__$start_lsn"
-        if self.ingest_type == "cdc" and "__start_lsn" in self._source_data.columns
-        else "dl_watermark"
-        if self.source_watermark_identifier
-        else None
-    )
+    is_cdc = str(self.ingest_type).lower() == "cdc"
+    lsn_column = self._resolve_lsn_column() if is_cdc else None
 
-    if not watermark_column:
+    # Decide watermark column
+    if is_cdc and lsn_column:
+        watermark_column = lsn_column          # keep the real name for later
+        agg_column = lsn_column.replace("$", "")  # Spark-friendly name for agg
+    elif self.source_watermark_identifier:
+        watermark_column = "dl_watermark"
+        agg_column = self.source_watermark_identifier
+    else:
         self.logger.info(
             f"No valid watermark column found for {self.target_table}. "
             "Skipping watermark query file update."
@@ -33,13 +41,12 @@ def update_watermark_query(self) -> None:
 
     # Aggregate max watermark value
     try:
-        agg_col = watermark_column.replace("$", "")
         source_watermark_identifier_row = (
-            self._source_data.agg({agg_col: "max"}).collect()[0][0]
+            self._source_data.agg({agg_column: "max"}).collect()[0][0]
         )
     except Exception as e:
         self.logger.info(
-            f"Error aggregating watermark column {watermark_column} in "
+            f"Error aggregating watermark column {agg_column} in "
             f"{self.target_table}: {e}. Skipping watermark update."
         )
         return
@@ -51,15 +58,17 @@ def update_watermark_query(self) -> None:
         )
         return
 
-    # Convert bytearray to SQL Server binary(10) format when needed
-    if watermark_column == "__$start_lsn":
-        source_watermark_identifier_value = "0x" + source_watermark_identifier_row.hex()
+    # Convert bytearray → SQL Server binary(10) when it is an LSN
+    if is_cdc:
+        if isinstance(source_watermark_identifier_row, (bytes, bytearray)):
+            source_watermark_identifier_value = "0x" + source_watermark_identifier_row.hex()
+        else:
+            # already a string / other type
+            source_watermark_identifier_value = str(source_watermark_identifier_row)
     else:
         source_watermark_identifier_value = source_watermark_identifier_row
 
-    # ------------------------------------------------------------------
-    # Prepare filter (fixed)
-    # ------------------------------------------------------------------
+    # Filter (safe append)
     filter_condition = self._clean_filter_expression(self.filterExpression)
     filter_clause = f" AND {filter_condition}" if filter_condition else ""
 
@@ -68,13 +77,13 @@ def update_watermark_query(self) -> None:
     source_table = self.target_table
 
     # ------------------------------------------------------------------
-    # Build query
+    # Build query – CDC branch is now driven by is_cdc + successful LSN
     # ------------------------------------------------------------------
-    if self.ingest_type == "cdc" and "__start_lsn" in self._source_data.columns:
+    if is_cdc:
         self.logger.info(
             f"Updating CDC watermark query file for {self.dataset_file_name} dataset"
         )
-        primary_keys = ",".join(self.candidate_keys)
+        primary_keys = ",".join(self.candidate_keys or [])
         table_name = f"[cdc].[{source_table_schema}_{source_table}_CT]"
         cdc_columns = ["__$operation", "__$start_lsn", "__$command_id", "__$seqval"]
 
@@ -105,11 +114,10 @@ WHERE rn = 1"""
         source_watermark_id_out = "__$start_lsn"
 
     else:
+        # Regular watermark path – only reached when source_watermark_identifier is set
         self.logger.info(
             f"Updating watermark query file for {self.dataset_file_name} dataset"
         )
-
-        # Handle SELECT * + watermark column correctly
         if include_specific_columns.strip() == "*":
             select_list = f"*, {self.source_watermark_identifier} AS dl_watermark"
         else:
@@ -144,7 +152,6 @@ WHERE {self.source_watermark_identifier} > CAST('{source_watermark_identifier_va
         f"{self.dataset_file_name}.json"
     )
 
-    # indent=2 makes the query string readable when the JSON is opened
     notebookutils.fs.put(
         file_location,
         json.dumps(query_extract_json, indent=2, ensure_ascii=False),
