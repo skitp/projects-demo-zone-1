@@ -1,0 +1,12 @@
+ID,Task,Hours
+T01,Design review & freeze hash recipe,4
+T02,Implement IdentityKeyMap,8
+T03,Integrate into LoadStrategy,4
+T04,Validate load strategies,8
+T05,Backfill / seed utility,6
+T06,Pilot on dim_adjuster,4
+T07,README and runbook,3
+T08,Code review and PR,3
+T09,UAT with Power BI consumers,4
+T10,Buffer / edge cases,4
+,Total,48
