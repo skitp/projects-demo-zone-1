@@ -1,0 +1,5 @@
+Notes
+Prefer the SDK + getToken("storage") approach for a single file download—it is straightforward and does not require mounting.
+If you use the dfs endpoint (abfss://...dfs.core.windows.net) you also need a managed private endpoint for the dfs subresource.
+For production, store the storage account name in a Key Vault secret or notebook parameter rather than hard-coding it.
+After you have pdf_bytes or local_pdf_path, pass it to the email-sending code you already have.
