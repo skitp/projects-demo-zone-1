@@ -1,0 +1,106 @@
+
+---
+
+### 2. Notebook Template (`SharePointManager_Template.ipynb` style)
+
+You can copy the cells below into a new Fabric notebook.
+
+```python
+# Cell 1 – Install dependencies (run once)
+%pip install requests azure-identity azure-keyvault-secrets openpyxl pandas
+
+# Cell 2 – Imports
+from gap_logging import GDAPLogging
+from gdap_spark.sharepoint import SharePointManager   # adjust import path as needed
+
+import logging
+
+# Cell 3 – Configuration
+KEY_VAULT_URL = "https://your-kv.vault.azure.net/"
+SITE_ID = "yourdomain.sharepoint.com,xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx,yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+
+# Optional: override logger name
+logger = GDAPLogging.get_logger("SharePointManager_Notebook")
+
+# Cell 4 – Initialize SharePointManager
+spm = SharePointManager(
+    key_vault_url=KEY_VAULT_URL,
+    site_id=SITE_ID,
+    logger_name="SharePointManager_Notebook"
+)
+
+print("SharePointManager initialized")
+
+# Cell 5 – List folder contents
+items = spm.list_folder(
+    sharepoint_folder_path="/sites/MySite/Shared Documents/incoming",
+    recursive=False
+)
+
+for item in items:
+    print(f"{'[DIR]' if item['is_folder'] else '[FILE]'} {item['name']}  ({item.get('size', 0)} bytes)")
+
+# Cell 6 – Download a single file
+downloaded_path = spm.download_file(
+    sharepoint_path="/sites/MySite/Shared Documents/incoming/sample.csv",
+    lakehouse_target_path="Incoming/sample.csv"
+)
+
+print(f"Downloaded to: {downloaded_path}")
+
+# Cell 7 – Download an entire folder (recursive)
+downloaded_files = spm.download_folder(
+    sharepoint_folder_path="/sites/MySite/Shared Documents/incoming",
+    lakehouse_target_folder="Incoming",
+    recursive=True
+)
+
+print(f"Downloaded {len(downloaded_files)} files")
+
+# Cell 8 – Upload a DataFrame as CSV
+# Example: create a small DataFrame
+df = spark.createDataFrame(
+    [(1, "Alice"), (2, "Bob")],
+    ["id", "name"]
+)
+
+spm.upload_dataframe(
+    df=df,
+    sharepoint_folder_path="/sites/MySite/Shared Documents/exports",
+    file_name="users.csv",
+    format="csv"
+)
+
+# Cell 9 – Upload a DataFrame as Excel
+spm.upload_dataframe(
+    df=df,
+    sharepoint_folder_path="/sites/MySite/Shared Documents/exports",
+    file_name="users.xlsx",
+    format="excel",
+    sheet_name="Users"
+)
+
+# Cell 10 – Upload a Delta table as Parquet or Excel
+spm.upload_delta_table(
+    delta_table_path="/lakehouse/default/Tables/my_delta_table",
+    sharepoint_folder_path="/sites/MySite/Shared Documents/exports",
+    file_name="my_table.xlsx",
+    format="excel"
+)
+
+# Cell 11 – Ingest-style helper (download + metadata)
+meta = spm.ingest_from_sharepoint(
+    sharepoint_path="/sites/MySite/Shared Documents/incoming/orders.csv",
+    lakehouse_target_path="Incoming/orders.csv"
+)
+print(meta)
+
+# Cell 12 – Export-style helper
+meta = spm.export_to_sharepoint(
+    source=df,   # or a Delta table path string
+    sharepoint_folder_path="/sites/MySite/Shared Documents/exports",
+    file_name="export_summary.xlsx",
+    format="excel"
+)
+print(meta)
+
