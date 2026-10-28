@@ -1,0 +1,191 @@
+The root cause was a compatibility regression introduced by Great Expectations 1.24.0 that changed Spark condition processing. The existing DQ framework used string-based validation predicates rather than strongly typed Spark Boolean expressions. While this implementation was tolerated by Great Expectations 1.23.1, the 1.24.0 changes caused the predicate to be propagated as a STRING value, resulting in Spark rejecting the generated CASE WHEN expression with DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE.
+
+Yes, but the key is not just rewriting the SQL. You must ensure the framework parses the SQL text into a Spark Boolean Column before passing it to when(). A syntactically valid SQL predicate can still become STRING if the implementation uses lit() or otherwise treats it as a value.
+
+Preferred fix
+1. Store only the predicate in configuration
+condition: "state IS NOT NULL AND length(state) <> 2"
+
+
+Do not store a complete CASE WHEN expression unless the framework specifically requires one.
+
+2. Parse it with F.expr()
+from pyspark.sql import functions as F
+
+condition_sql = config["condition"]
+
+boolean_condition = F.expr(condition_sql)
+
+failure_expression = F.array(
+    F.struct(
+        F.lit(484).cast("int"),
+        F.lit("DP_TXN_489").cast("string"),
+        F.lit(0).cast("double"),
+        F.lit(True).cast("boolean"),
+    )
+)
+
+result = F.when(
+    boolean_condition,
+    failure_expression,
+)
+
+
+F.expr() instructs Spark to parse the string as executable SQL. In this case, the result is a Column whose datatype is Boolean.
+
+Incorrect implementation
+
+This converts the predicate text into a literal string value:
+
+condition_sql = "state IS NOT NULL AND length(state) <> 2"
+
+condition = F.lit(condition_sql)  # STRING column
+
+result = F.when(condition, failure_expression)
+
+
+Conceptually, that produces:
+
+CASE
+    WHEN 'state IS NOT NULL AND length(state) <> 2'
+    THEN ...
+END
+
+
+The WHEN input is STRING, which causes:
+
+Parameter 1 requires the "BOOLEAN" type
+
+Correct implementation
+condition_sql = "state IS NOT NULL AND length(state) <> 2"
+
+condition = F.expr(condition_sql)  # BOOLEAN column
+
+result = F.when(condition, failure_expression)
+
+
+This produces the equivalent of:
+
+CASE
+    WHEN state IS NOT NULL AND length(state) <> 2
+    THEN ...
+END
+
+Safer SQL expression
+
+I would simplify the original generated condition:
+
+(state IS NOT NULL)
+AND
+(NOT (CAST(length(state) AS DOUBLE) = 2.0D))
+
+
+to:
+
+state IS NOT NULL
+AND length(state) <> 2
+
+
+There is no reason to cast length(state) to DOUBLE, because length() naturally returns an integer and the required length is an integer.
+
+If nulls should also be considered invalid, use:
+
+state IS NULL
+OR length(state) <> 2
+
+
+The correct choice depends on the DQ rule:
+
+state IS NOT NULL AND length(state) <> 2: ignores nulls and flags only populated values with an invalid length.
+state IS NULL OR length(state) <> 2: flags nulls and invalid lengths.
+Validate configured expressions before execution
+
+Because the framework accepts configurable SQL, add a validation step before constructing the final CASE WHEN:
+
+from pyspark.sql import functions as F
+from pyspark.sql.types import BooleanType
+
+condition_sql = config["condition"]
+condition = F.expr(condition_sql)
+
+test_df = source_df.select(condition.alias("__dq_condition"))
+condition_type = test_df.schema["__dq_condition"].dataType
+
+if not isinstance(condition_type, BooleanType):
+    raise ValueError(
+        "DQ condition must resolve to BooleanType. "
+        f"Expression: {condition_sql!r}; "
+        f"resolved type: {condition_type.simpleString()}"
+    )
+
+
+This converts the runtime Spark error into a clear configuration error before the larger DQ expression is built.
+
+For example, this invalid configuration:
+
+condition: "'state IS NOT NULL AND length(state) <> 2'"
+
+
+would resolve to STRING because the outer single quotes make the entire predicate a SQL string literal. The pre-validation would reject it immediately.
+
+Native Spark expression is still safest
+
+When the rule is implemented in Python rather than external configuration, avoid SQL text entirely:
+
+from pyspark.sql import functions as F
+
+condition = (
+    F.col("state").isNotNull()
+    & (F.length(F.col("state")) != F.lit(2))
+)
+
+result = F.when(condition, failure_expression)
+
+
+This eliminates ambiguity because condition is created as a native Spark Boolean Column.
+
+Passing a condition directly to GEX
+
+For a conditional Great Expectations rule, row_condition is designed to be a Boolean expression string, accompanied by the appropriate condition parser. On Spark, GEX parses that expression as a data filter before validation.
+
+Example:
+
+expectation = gxe.ExpectColumnValueLengthsToEqual(
+    column="state",
+    value=2,
+    row_condition="state IS NOT NULL",
+    condition_parser="great_expectations__experimental__",
+)
+
+
+However, if your framework itself creates the surrounding CASE WHEN, the important fix remains:
+
+F.expr(condition_string)
+
+
+not:
+
+F.lit(condition_string)
+
+
+If the intent is to define the entire validation using SQL, GEX also supports UnexpectedRowsExpectation, where the query returns invalid rows and validation succeeds when no rows are returned.
+
+query = """
+SELECT *
+FROM {batch}
+WHERE state IS NULL
+   OR length(state) <> 2
+"""
+
+expectation = gx.expectations.UnexpectedRowsExpectation(
+    unexpected_rows_query=query,
+    description="State must contain exactly two characters.",
+)
+
+Revised root-cause wording
+
+The original DQ rule was configured as free-form SQL text without enforcing that the expression resolved to a Spark Boolean type before it was used as the predicate of a generated CASE WHEN. The implementation passed the configured condition through a string-producing path rather than explicitly parsing it with F.expr() or constructing it as a native Spark Boolean Column. Great Expectations 1.23.1 tolerated the implementation, while the expression-generation changes in 1.24.0 exposed the latent defect. Spark consequently received a STRING expression where CASE WHEN required BOOLEAN, resulting in DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE.
+
+The exception could have been prevented by constructing the condition with F.expr("state IS NOT NULL AND length(state) <> 2"), or preferably with native Spark column operations, and validating that every configurable condition resolves to BooleanType before execution.
+
+The main change is to distinguish SQL text from an executable Boolean expression. Rewriting the predicate makes it cleaner, but F.expr() or native Spark column construction is what guarantees the correct type.
