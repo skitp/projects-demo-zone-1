@@ -2,3 +2,7 @@ git diff --name-status origin/main...origin/release/platform-services-v2.6.1 -- 
 git diff --dirstat=files,0 origin/main...origin/release/platform-services-v2.6.1 -- src/fabric/engineering_service
 git diff --stat origin/main...origin/release/platform-services-v2.6.1 -- src/fabric/engineering_service
 
+git diff --name-status origin/main...origin/release/platform-services-v2.6.1 -- src/fabric/engineering_service
+git diff origin/main...origin/release/platform-services-v2.6.1 -- src/fabric/engineering_service
+
+git diff origin/main origin/release/platform-services-v2.6.1 -- src/fabric/engineering_service
