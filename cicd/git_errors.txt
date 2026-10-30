@@ -1,5 +1,4 @@
-GUARD+SKolpakov@CN3GXJ4 UCRT64 ~/repos/DnA Pdt and Prc - Comn Pdt Lyr (main)
-$ git diff --dirstat=cumulative,files origin/main/src/fabric/engineering_service...origin/release/platform-services-v2.6.1/src/fabric/engineering_service/
-fatal: ambiguous argument 'origin/main/src/fabric/engineering_service...origin/release/platform-services-v2.6.1/src/fabric/engineering_service/': unknown revision or path not in the working tree.
-Use '--' to separate paths from revisions, like this:
-'git <command> [<revision>...] -- [<file>...]'
+git diff --name-status origin/main...origin/release/platform-services-v2.6.1 -- src/fabric/engineering_service
+git diff --dirstat=files,0 origin/main...origin/release/platform-services-v2.6.1 -- src/fabric/engineering_service
+git diff --stat origin/main...origin/release/platform-services-v2.6.1 -- src/fabric/engineering_service
+
