@@ -1,17 +1,15 @@
 import json
 import re
 import os
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import logging
 import fsspec
 from azure.storage.blob import BlobServiceClient
-from azure.core.credentials import AccessToken, TokenCredential
+from azure.identity import ClientSecretCredential
 import notebookutils
 
-from spark_engine.common.email_util import send_email 
+from spark_engine.common.email_util import send_email
 from spark_engine.common.lakehouse import LakehouseManager
-
-
 
 # Configure logging
 logging.basicConfig(
@@ -20,42 +18,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# CONFIGURATION & CONSTANTS
+# =============================================================================
+# blobPath is set by the Activator / parameter cell, e.g.:
+# blobPath = "/blobServices/default/containers/fnol-claims-pdfs/blobs/GT-5801d372.pdf"
+blobPath = "/blobServices/default/containers/fnol-claims-pdfs/blobs/GT-5801d372.pdf"  # example / parameter
 
-# Parameters (from Activator)
-# blobPath is already set by the parameter cell, e.g.:
-blobPath = "/blobServices/default/containers/fnol-claims-pdfs/blobs/GT-5801d372.pdf"
+# Key Vault secret names for the Service Principal that has access to the storage account
+# (Storage Blob Data Contributor or equivalent). Adjust names if they differ in your vault.
+SP_CLIENT_ID_SECRET = "fnolai-storage-client-id"
+SP_CLIENT_SECRET_SECRET = "fnolai-storage-client-secret"
+SP_TENANT_ID_SECRET = "fnolai-storage-tenant-id"
 
-
-
-# Parse the subject
-match = re.search(r"/containers/([^/]+)/blobs/(.+)", blobPath)
-if not match:
-    raise ValueError(f"Cannot parse blob subject: {blobPath}")
-
-container_name = match.group(1)
-blob_name = match.group(2)
-print(f"Container: {container_name}")
-print(f"Blob: {blob_name}")
-
-
-
-# Configurations and Constants
-app_config = notebookutils.variableLibrary.getLibrary("app_config")
-secretsScope = notebookutils.variableLibrary.get("$(/**/app_config/key_vault_name)")
-email_recipient = notebookutils.variableLibrary.get("$(/**/app_config/fnol_email_recipient)")
-storage_account_name = app_config.fnolai_storage_account_name
+# Other configuration
 template_name = "fnolai_web_entry.json"
 attachments_tmp_dir = "tmp"
 
-
-
-# Custom credential that uses notebookutils token
-class NotebookUtilsCredential(TokenCredential):
-    def get_token(self, *scopes, **kwargs):
-        token = notebookutils.credentials.getToken("storage")
-        # Token is valid for ~1 hour; set a safe expiry
-        return AccessToken(token, int(__import__("time").time()) + 3400)
-
+# Option to extract PDF text and embed it into the email body
+# Set to False to only attach the PDF file (no body embedding)
+EMBED_PDF_CONTENT = True
 
 # =============================================================================
 # HELPER FUNCTIONS
@@ -65,17 +47,7 @@ def get_template_location_url(
     notification_type: str = "emails",
     file_name: str = ""
 ) -> Optional[str]:
-    """
-    Get the URL for the template location in the lakehouse.
-    
-    Args:
-        lakehouse_name: Name of the lakehouse
-        notification_type: Type of notification (e.g., emails)
-        file_name: Name of the template file
-    
-    Returns:
-        String URL path or None if error occurs
-    """
+    """Get the ABFSS URL for the email template in the metadata lakehouse."""
     try:
         lakehouse_manager = LakehouseManager(lakehouse_name=lakehouse_name)
         template_path = f"{lakehouse_manager.lakehouse_path}/Files/templates/{notification_type}"
@@ -84,21 +56,12 @@ def get_template_location_url(
         logger.error(f"Failed to get template location URL: {str(e)}")
         return None
 
+
 def replace_tokens_in_json_object(json_object: Dict, param_dict: Dict) -> Optional[Dict]:
-    """
-    Replace tokens in JSON object with parameter values.
-    
-    Args:
-        json_object: JSON object to process
-        param_dict: Dictionary of token-value pairs
-    
-    Returns:
-        Processed JSON dictionary or None if error occurs
-    """
+    """Replace {token} placeholders in a JSON object with values from param_dict."""
     try:
         value = json.dumps(json_object)
         for k, v in param_dict.items():
-            # Ensure value is string and handle None values
             v = str(v) if v is not None else ""
             value = value.replace('{' + k + '}', v)
         return json.loads(value)
@@ -106,136 +69,261 @@ def replace_tokens_in_json_object(json_object: Dict, param_dict: Dict) -> Option
         logger.error(f"Error replacing tokens in JSON: {str(e)}")
         return None
 
+
 def read_json_file(file_location: str) -> Optional[Dict]:
-    """
-    Read and parse JSON file from the specified location.
-    
-    Args:
-        file_location: Path to the JSON file
-    
-    Returns:
-        Parsed JSON dictionary or None if error occurs
-    """
-    try:    
-        jsonDf = spark.read.text(file_location, wholetext=True)
-        content = jsonDf.first()["value"]
+    """Read and parse a JSON file from OneLake / ABFSS."""
+    try:
+        json_df = spark.read.text(file_location, wholetext=True)
+        content = json_df.first()["value"]
         return json.loads(content)
     except (json.JSONDecodeError, Exception) as e:
         logger.error(f"Error reading JSON file {file_location}: {str(e)}")
         return None
 
 
-# Set filesystem options
-STORAGE_OPTIONS = {
-    "account_name": "onelake",
-    "account_host": "onelake.dfs.fabric.microsoft.com",
-}
-dfs = fsspec.filesystem("abfss", **STORAGE_OPTIONS)
+def get_service_principal_credential(key_vault_name: str) -> ClientSecretCredential:
+    """
+    Retrieve Service Principal credentials from Key Vault and return a ClientSecretCredential.
+    Secrets must already exist in the vault.
+    """
+    try:
+        client_id = notebookutils.credentials.getSecret(key_vault_name, SP_CLIENT_ID_SECRET)
+        client_secret = notebookutils.credentials.getSecret(key_vault_name, SP_CLIENT_SECRET_SECRET)
+        tenant_id = notebookutils.credentials.getSecret(key_vault_name, SP_TENANT_ID_SECRET)
+
+        if not all([client_id, client_secret, tenant_id]):
+            raise ValueError("One or more Service Principal secrets returned empty values")
+
+        logger.info("Successfully retrieved Service Principal credentials from Key Vault")
+        return ClientSecretCredential(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+    except Exception as e:
+        logger.error(f"Failed to create Service Principal credential: {str(e)}")
+        raise
 
 
-# Create directory
-notebookutils.fs.mkdirs(attachments_tmp_dir)
+def extract_pdf_text(pdf_bytes: bytes) -> str:
+    """
+    Extract plain text from PDF bytes.
+    Tries pypdf first, then PyPDF2. Returns empty string on failure.
+    """
+    text_parts = []
+    try:
+        # Prefer modern pypdf
+        try:
+            from pypdf import PdfReader
+            from io import BytesIO
+            reader = PdfReader(BytesIO(pdf_bytes))
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(page_text)
+            logger.info(f"Extracted text from PDF using pypdf ({len(reader.pages)} pages)")
+        except ImportError:
+            # Fallback to PyPDF2
+            from PyPDF2 import PdfReader
+            from io import BytesIO
+            reader = PdfReader(BytesIO(pdf_bytes))
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(page_text)
+            logger.info(f"Extracted text from PDF using PyPDF2 ({len(reader.pages)} pages)")
+    except Exception as e:
+        logger.warning(f"Failed to extract PDF text: {str(e)}")
+        return ""
 
-# Get filename
-# file_name = os.path.basename(blob_client.blob_name)
+    return "\n\n".join(text_parts).strip()
 
-# ABFSS destination
-pdf_path = f"{attachments_tmp_dir.rstrip('/')}/{blob_name}"
 
-# Download PDF from Blob Storage
-pdf_bytes = blob_client.download_blob().readall()
+def download_blob_to_onelake(
+    storage_account_name: str,
+    container_name: str,
+    blob_name: str,
+    credential: ClientSecretCredential,
+    dest_path: str
+) -> tuple[str, bytes]:
+    """
+    Download a blob from Azure Storage using Service Principal auth
+    and write it to OneLake (ABFSS).
+    Returns (dest_path, pdf_bytes).
+    """
+    account_url = f"https://{storage_account_name}.blob.core.windows.net"
+    blob_service_client = BlobServiceClient(account_url=account_url, credential=credential)
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
 
-# Write binary data directly to ABFSS
-with dfs.open(pdf_path, "wb") as f:
-    f.write(pdf_bytes)
+    logger.info(f"Downloading blob '{blob_name}' from container '{container_name}'")
+    pdf_bytes = blob_client.download_blob().readall()
 
-print(f"Downloaded to: {pdf_path}")
+    # Write binary data to ABFSS
+    STORAGE_OPTIONS = {
+        "account_name": "onelake",
+        "account_host": "onelake.dfs.fabric.microsoft.com",
+    }
+    dfs = fsspec.filesystem("abfss", **STORAGE_OPTIONS)
+
+    # Ensure parent directory exists
+    notebookutils.fs.mkdirs(os.path.dirname(dest_path) or attachments_tmp_dir)
+
+    with dfs.open(dest_path, "wb") as f:
+        f.write(pdf_bytes)
+
+    logger.info(f"Blob downloaded and saved to: {dest_path}")
+    return dest_path, pdf_bytes
 
 
 def process_alerts(
     template_name: str,
     storage_name: str,
     email_recipient: str,
-    attachments: list[dict]
+    attachments: List[str],
+    pdf_text: Optional[str] = None
 ) -> bool:
     """
-    Main function to process alerts and send email notifications.
-    
-    Returns:
-        True if email sent successfully, False otherwise
+    Process email alert: load template, replace tokens, and send with attachments.
+    If pdf_text is provided, embeds the PDF content into the email body.
     """
     try:
-        # Validate required parameters
         required_params = {
             'template_name': template_name,
             'storage_name': storage_name,
             'email_recipient': email_recipient
         }
-        
         for param, value in required_params.items():
             if not value:
-                logger.error(f"Missing required parameter: {param}")
                 raise ValueError(f"Missing required parameter: {param}")
-        
-        # Create replacement tokens dictionary
+
         replacement_tokens = {
             'storage_account': storage_name,
             'user_email': email_recipient
         }
 
-        # Get template location
+        # Add PDF content as a token if available (templates can use {pdf_content})
+        if pdf_text:
+            replacement_tokens['pdf_content'] = pdf_text
+
         logger.info(f"Getting template location for: {template_name}")
         template_location = get_template_location_url(file_name=template_name)
         if not template_location:
             raise ValueError("Failed to get template location")
         logger.info(f"Template location: {template_location}")
-        # Read and process template
+
         template_data = read_json_file(template_location)
         if not template_data:
             raise ValueError("Failed to read template file")
 
-        # Replace tokens
         processed_template = replace_tokens_in_json_object(template_data, replacement_tokens)
         if not processed_template:
             raise ValueError("Failed to process template tokens")
 
-        # Prepare email parameters
+        body = processed_template.get("body", {}).get("content", "")
+
+        # Embed PDF text into the body if provided and not already inserted via token
+        if pdf_text and "{pdf_content}" not in str(template_data):
+            embed_section = (
+                "<hr style='margin: 20px 0;'/><h3>PDF Content</h3>"
+                f"<pre style='white-space: pre-wrap; font-family: monospace; font-size: 12px;'>{pdf_text}</pre>"
+            )
+            body = body + embed_section if body else embed_section
+            logger.info("Embedded extracted PDF text into email body")
+
+        # Key vault name for the email utility (existing pattern)
+        secrets_scope = notebookutils.variableLibrary.get("$(/**/app_config/key_vault_name)")
+
         input_params = {
             "subject": processed_template.get("subject", ""),
-            "body": processed_template.get("body", {}).get("content", ""),
+            "body": body,
             "to_email": processed_template.get("emailRecipient", ""),
             "from_account": processed_template.get("emailSender", ""),
-            "key_vault_name": secretsScope,
+            "key_vault_name": secrets_scope,
             "attachments": attachments
         }
 
-        # Validate email parameters
         for param in ["subject", "body", "to_email", "from_account"]:
             if not input_params[param]:
-                logger.error(f"Missing email parameter: {param}")
                 raise ValueError(f"Missing email parameter: {param}")
 
-        # Send email
         logger.info("Sending mail ...")
         send_email(**input_params)
+        logger.info("Email sent successfully")
         return True
 
     except Exception as e:
-        logger.error(f"Alert processing error: {str(e)}")
+        logger.error(f"Alert processing error: {str(e)}", exc_info=True)
         return False
+
+
+# =============================================================================
+# MAIN EXECUTION
+# =============================================================================
+def main():
+    start_time = datetime.now() if 'datetime' in dir() else None  # optional timing
+    logger.info("Starting FNOL email alert processing")
+
+    try:
+        # Parse blob path from Activator subject
+        match = re.search(r"/containers/([^/]+)/blobs/(.+)", blobPath)
+        if not match:
+            raise ValueError(f"Cannot parse blob subject: {blobPath}")
+
+        container_name = match.group(1)
+        blob_name = match.group(2)
+        logger.info(f"Container: {container_name}, Blob: {blob_name}")
+
+        # Load configuration from Variable Library
+        app_config = notebookutils.variableLibrary.getLibrary("app_config")
+        secrets_scope = notebookutils.variableLibrary.get("$(/**/app_config/key_vault_name)")
+        email_recipient = notebookutils.variableLibrary.get("$(/**/app_config/fnol_email_recipient)")
+        storage_account_name = app_config.fnolai_storage_account_name
+
+        if not storage_account_name:
+            raise ValueError("fnolai_storage_account_name is not configured")
+
+        # Create Service Principal credential from Key Vault
+        credential = get_service_principal_credential(secrets_scope)
+
+        # Download PDF to OneLake tmp location (also returns bytes for optional text extraction)
+        pdf_path = f"{attachments_tmp_dir.rstrip('/')}/{blob_name}"
+        pdf_path, pdf_bytes = download_blob_to_onelake(
+            storage_account_name=storage_account_name,
+            container_name=container_name,
+            blob_name=blob_name,
+            credential=credential,
+            dest_path=pdf_path
+        )
+
+        # Optionally extract PDF text for embedding in the email body
+        pdf_text = None
+        if EMBED_PDF_CONTENT:
+            pdf_text = extract_pdf_text(pdf_bytes)
+            if pdf_text:
+                logger.info(f"PDF text extracted ({len(pdf_text)} characters) — will embed in email")
+            else:
+                logger.warning("PDF text extraction returned empty — email will only include the attachment")
+
+        # Send email with attachment (and embedded content if enabled)
+        success = process_alerts(
+            template_name=template_name,
+            storage_name=storage_account_name,
+            email_recipient=email_recipient,
+            attachments=[pdf_path],
+            pdf_text=pdf_text
+        )
+
+        if not success:
+            logger.error("Alert processing failed")
+            raise RuntimeError("Email alert processing failed")
+
+        logger.info("FNOL email alert processing completed successfully")
+
     except Exception as e:
-        logger.error(f"Unexpected error in alert processing: {str(e)}", exc_info=True)
-        return False
+        logger.error(f"Fatal error in main execution: {str(e)}", exc_info=True)
+        raise
 
 
 if __name__ == "__main__":
-    # process alerts
-    success = process_alerts(
-        template_name=template_name,
-        storage_name=storage_account_name,
-        email_recipient=email_recipient,
-        attachments=[pdf_path]
-    )
-if not success:
-    logger.error("Alert processing failed")
-    exit(1)
+    from datetime import datetime
+    main()
