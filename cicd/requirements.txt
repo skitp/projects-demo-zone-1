@@ -1,0 +1,197 @@
+As the Fluidity Platform Owner,
+I want AVP of AI Agentic solution (@Mark White) and AVP of Engineering & DevOps (@Sergei Kolpakov) to design and implement a standardized, secure, parameterized and automated CI/CD deployment process for solutions consisting of Azure resources, Microsoft Fabric artifacts and Microsoft Foundry agents,
+so that validated solutions can be promoted from DEV through non-production validation into PROD consistently, securely and with minimal manual intervention, while maintaining environment isolation, governance, auditability, rollback capability and production evidence.
+
+1. Business Context
+The TM Co-Pilot architecture represents a multi-platform application consisting of:
+
+Microsoft Entra ID
+Teams personal tab
+Standalone React/browser application
+Azure App Service
+Azure Key Vault
+Cosmos DB
+Application Insights
+Log Analytics
+Microsoft Foundry project and agents
+Microsoft Fabric Lakehouse / SQL endpoint
+potentially Power BI semantic model
+optional lifecycle worker
+Azure DevOps/source-control components
+networking/public gateway controls
+The ideal outcome is 
+Merge approved, version-controlled solution artifacts once and use an Azure DevOps-controlled deployment process to reproducibly provision, configure, validate and promote the complete solution into the target environment.
+
+However, for the first time deployment, if certain aspects can't be automated it is okay to be performed manually.
+
+2. Scope
+2.1 Infrastructure deployment
+The Platform Solution Architects must establish Infrastructure-as-Code for all Azure resources that are technically appropriate to provision automatically.
+
+At minimum, assess and automate:
+
+Component	Required CI/CD treatment
+Azure App Service	IaC + application deployment
+App Service configuration	Environment parameterization
+Azure Key Vault	IaC, RBAC/policies; secrets injected separately
+Cosmos DB	IaC for account/database/container configuration
+Application Insights	IaC
+Log Analytics	IaC
+Microsoft Entra configuration	Automate where supported; document controlled/manual exceptions
+Gateway/network controls	IaC where platform ownership/API support permits
+DNS	Automate where permitted
+Managed identities/service principals	Automated/controlled provisioning where organizational policy permits
+
+3. Environments
+The deployment design must establish an explicit promotion path.
+
+Recommended logical model:
+
+DEV → NONPROD → PROD
+
+Each environment must maintain separate:
+
+resource names/identifiers;
+resource groups where applicable;
+Foundry projects;
+Key Vaults/secrets;
+configuration;
+Cosmos resources/data boundaries;
+Fabric workspaces and environment-specific configuration;
+application URLs;
+Entra redirect URLs/configuration;
+monitoring destinations where required;
+identities/RBAC assignments.
+No DEV credentials, endpoints, tokens or resource IDs may be embedded in PROD artifacts.
+
+Since there are only 2 subscriptions on Azure; DEV and PRD, make a decision as to where the NONPROD would fit in the 2 subscriptions world.
+
+ 
+4. CI Process
+A pull request must initiate Continuous Integration.
+
+The CI pipeline should, where applicable:
+
+Checkout source.
+Validate YAML/pipeline definitions.
+Validate IaC syntax.
+Perform IaC static analysis.
+Validate application dependencies.
+Build React/front-end application.
+Validate/build Python App Service code.
+Run automated unit tests.
+Run security/SAST checks.
+Scan dependencies.
+Ensure secrets are not committed.
+Validate Fabric artifacts.
+Validate Foundry agent definitions/configuration that can be validated programmatically.
+Generate/version deployment artifacts.
+Publish immutable deployment artifacts.
+retain evidence against the Azure DevOps run.
+A failed mandatory validation must prevent merge/deployment.
+
+5. CD Process
+The deployment pipeline should orchestrate the complete solution rather than having unrelated deployment procedures for each technology.
+
+Phase 1: Pre-deployment
+resolve target environment;
+retrieve approved deployment artifact/version;
+authenticate using approved workload identity;
+retrieve required secrets/configuration;
+validate prerequisites;
+validate target environment;
+capture current deployed version for rollback;
+perform deployment preview/plan where supported.
+Phase 2: Azure infrastructure
+Provision/update:
+
+App Service;
+Cosmos DB infrastructure;
+Key Vault;
+Application Insights;
+Log Analytics;
+associated identities/RBAC;
+configured networking/gateway resources;
+supporting resources.
+Infrastructure deployment must be idempotent.
+
+Phase 3: Application
+Deploy:
+
+Python application/API;
+React/browser assets;
+runtime configuration;
+health-check configuration.
+No environment-specific secret may be stored in the application artifact.
+
+Phase 4: Fabric
+Leverage existing CICD process of the Platform DEVOPS service. Make necessary change as required for the Agentic Use Cases.
+
+Phase 5: Foundry
+Deploy:
+A. Source-controlled and automatically deployed
+B. Automatically configured after deployment
+C. Environment-created but configuration injected
+D. Controlled manual deployment because no supported automation exists
+
+
+
+6. Release Governance
+PROD deployment must require an Azure DevOps protected deployment mechanism appropriate to your governance model.
+
+Recommended gates:
+
+PR approved → CI successful → DEV deployment → automated tests → PREPROD → validation → PROD approval → PROD deploy → smoke test → evidence
+
+Production approval must be independent of the developer initiating the change where required by platform governance.
+
+The pipeline must record:
+
+release/version;
+Git commit;
+PR;
+pipeline run;
+approver;
+target environment;
+deployment timestamp;
+artifacts deployed;
+validation outcome.
+
+7. Rollback / Recovery
+The Platform Solution Architects must implement and demonstrate a rollback strategy.
+
+Rollback cannot simply mean "rerun the pipeline."
+
+The design must identify rollback behavior for:
+
+Layer	Required strategy
+Application	Redeploy previous immutable version
+Azure configuration	Known-good IaC/config version
+Fabric	Previous validated definition/release
+Foundry	Previous validated agent/config definition where supported
+Cosmos DB	Schema/config rollback strategy
+Secrets	Versioned Key Vault recovery/rotation approach
+Data	Explicitly separate application rollback from destructive data rollback
+A failed deployment must leave the environment either:
+
+automatically restored to the last known good state, or
+stopped in a documented recoverable state with an executable recovery procedure.
+8. Observability
+Following deployment, the pipeline must execute automated smoke tests and verify operational telemetry.
+
+The architecture identifies:
+
+Application Insights;
+Log Analytics;
+safe telemetry;
+code/settings deployment as runtime privilege.
+Minimum post-deployment validation:
+
+application health endpoint responds;
+authentication succeeds;
+API endpoint responds;
+Foundry invocation succeeds;
+Fabric governed query succeeds;
+Cosmos persistence/session path succeeds;
+Application Insights receives telemetry;
+critical deployment errors are absent.
