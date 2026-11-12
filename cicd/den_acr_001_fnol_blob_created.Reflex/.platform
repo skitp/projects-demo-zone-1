@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Reflex",
+    "displayName": "den_acr_001_fnol_blob_created"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "93d77c02-fa9c-a7a2-4523-b0fdace70c21"
+  }
+}
