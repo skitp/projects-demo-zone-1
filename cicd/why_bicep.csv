@@ -1,0 +1,9 @@
+Criterion,Bicep,Pulumi,Winner for this use case
+Azure-native alignment,"First-party, compiles to ARM, excellent support for App Service, Key Vault, Cosmos DB, networking, Entra ID, Foundry project infrastructure, managed identities","Good Azure support via providers, but third-party",Bicep
+State management,None required (uses Azure deployment history / deployment stacks),"Requires state (Pulumi Cloud, Azure Blob, or self-hosted)",Bicep
+Microsoft ecosystem fit,"Native with Azure Pipelines, what-if, deployment stacks, Azure Policy, Bicep registry modules","Works, but extra layer",Bicep
+Parameterization & environments,"Strong (parameter files, modules, symbolic names)",Very strong (real code),Tie / slight Pulumi
+Complex logic / loops / conditionals,Adequate with modules; can become verbose,"Excellent (TypeScript, Python, C#, etc.)",Pulumi
+Team & operational simplicity,Lower barrier for Azure-focused teams; no language runtime in the pipeline beyond the Bicep CLI,Higher (language SDK + state + potential Pulumi Cloud cost),Bicep
+Long-term Microsoft support,Directly supported and evolved by Microsoft,Community + Pulumi-maintained providers,Bicep
+Auditability & rollback,"Deployment history, deployment stacks, clear what-if","State-based, also solid",Bicep (slight edge)
