@@ -1,3 +1,4 @@
-2026-11-16T21:36:10.6222087Z ##[debug]Creating new Activator: den_acr_001_fnol_blob_created (folderId: a3f77bda-34a7-4977-a4e5-546cc0cb02a2)
-2026-11-16T21:36:17.0323459Z C:\Program Files\AzurePipelines\_work\_temp\131672a1-b4ac-47d1-a899-d03f293fc9b0.ps1 : Error deploying Activators: The 
-2026-11-16T21:36:17.0323772Z remote server returned an error: (400) Bad Request.
+Response body: 
+{"requestId":"657a1fb1-a0e0-42a5-8b5f-a546d2974b75","errorCode":"InvalidDefinitionFormat","message":"Requested item 
+definition format is invalid","isRetriable":false}
+
