@@ -1,4 +1,12 @@
+##[debug]Create request body (sanitized): {"displayName":"den_acr_001_fnol_blob_created","definition":{"parts":[{"payloadType":"InlineBase64","path":"ReflexEntities.json","payload":"<truncated>"},{"payloadType":"InlineBase64","path":".platform","payload":"<truncated>"}],"format":"Default"},"folderId":"92bbf74f-651b-4261-84fd-f21f95549fb1"}
+##[warning]Create with definition failed. Falling back to empty create + updateDefinition. Error: HTTP 400 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The remote server returned an error: (400) Bad Request.
+Response body: {"requestId":"87e49c7e-2938-4493-9354-cfe501b92d0e","errorCode":"InvalidDefinitionFormat","message":"Requested item definition format is invalid","isRetriable":false}
+C:\Program Files\AzurePipelines\_work\_temp\4c8a8a38-8a4c-4578-bb26-59f5e507333c.ps1 : Error deploying Activators: 
+HTTP 409 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The 
+remote server returned an error: (409) Conflict.
 Response body: 
-{"requestId":"cf7b559a-be95-4c63-a1d1-e4c3e0ca0f8c","errorCode":"Activator_Alm_UserError","message":"BadRequest: 
-{\"Message\":\"The importArtifactRequest field is required.\"}","isRetriable":false}
+{"requestId":"4c36546f-a56c-482d-ae6e-27f265ab45c1","errorCode":"ItemDisplayNameNotAvailableYet","message":"Requested 
+'den_acr_001_fnol_blob_created' is not available yet and is expected to become available in the upcoming 
+minutes.","isRetriable":true}
+
 
