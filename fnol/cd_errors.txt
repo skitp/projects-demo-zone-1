@@ -1,12 +1,23 @@
-##[debug]Create request body (sanitized): {"displayName":"den_acr_001_fnol_blob_created","definition":{"parts":[{"payloadType":"InlineBase64","path":"ReflexEntities.json","payload":"<truncated>"},{"payloadType":"InlineBase64","path":".platform","payload":"<truncated>"}],"format":"Default"},"folderId":"92bbf74f-651b-4261-84fd-f21f95549fb1"}
-##[warning]Create with definition failed. Falling back to empty create + updateDefinition. Error: HTTP 400 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The remote server returned an error: (400) Bad Request.
-Response body: {"requestId":"87e49c7e-2938-4493-9354-cfe501b92d0e","errorCode":"InvalidDefinitionFormat","message":"Requested item definition format is invalid","isRetriable":false}
-C:\Program Files\AzurePipelines\_work\_temp\4c8a8a38-8a4c-4578-bb26-59f5e507333c.ps1 : Error deploying Activators: 
-HTTP 409 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The 
-remote server returned an error: (409) Conflict.
-Response body: 
-{"requestId":"4c36546f-a56c-482d-ae6e-27f265ab45c1","errorCode":"ItemDisplayNameNotAvailableYet","message":"Requested 
-'den_acr_001_fnol_blob_created' is not available yet and is expected to become available in the upcoming 
-minutes.","isRetriable":true}
+##[debug]Entities snippet after substitution: [
+2026-11-16T23:30:12.9683687Z   {
+2026-11-16T23:30:12.9684543Z     "uniqueIdentifier": "6ff56a5d-44ad-4616-b2d4-62919f02c44c",
+2026-11-16T23:30:12.9684787Z     "payload": {
+2026-11-16T23:30:12.9684951Z       "name": "bhgdevdnafnolaieussa",
+2026-11-16T23:30:12.9685124Z       "connection": {
+2026-11-16T23:30:12.9685282Z         "scope": "SubArtifact",
+2026-11-16T23:30:12.9685545Z         "tenantId": "d9f7f9f1-c307-4884-ae62-0b13e49b2698",
+2026-11-16T23:30:12.9685828Z         "workspaceId": "382f4872-021b-4bf1-939c-d27612f4121a",
+2026-11-16T23:30:12.9686222Z         "subArtifactDisplayName": "/subscriptions/{{SUBSCRIPTION_ID}}/resourceGroups/{{RESOURCE_GR
+2026-11-16T23:30:12.9970369Z ##[debug]Creating new Activator: den_acr_001_fnol_blob_created (folderId: 92bbf74f-651b-4261-84fd-f21f95549fb1)
+2026-11-16T23:30:13.0022231Z ##[debug]Create request body (sanitized): {"displayName":"den_acr_001_fnol_blob_created","definition":{"parts":[{"payloadType":"InlineBase64","path":"ReflexEntities.json","payload":"<truncated>"},{"payloadType":"InlineBase64","path":".platform","payload":"<truncated>"}],"format":"json"},"folderId":"92bbf74f-651b-4261-84fd-f21f95549fb1"}
+2026-11-16T23:30:14.1803096Z ##[warning]Create with definition failed. Falling back to empty create + updateDefinition. Error: HTTP 400 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The remote server returned an error: (400) Bad Request.
+2026-11-16T23:30:14.1803805Z Response body: {"requestId":"a20dabc7-8187-41a5-8ccf-72f0e17556fb","errorCode":"InvalidDefinitionFormat","message":"Requested item definition format is invalid","isRetriable":false}
+2026-11-16T23:30:14.4700911Z C:\Program Files\AzurePipelines\_work\_temp\3c43ed9b-e44c-48ff-b718-5de40a5abbf6.ps1 : Error deploying Activators: 
+2026-11-16T23:30:14.4703029Z HTTP 409 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The 
+2026-11-16T23:30:14.4703279Z remote server returned an error: (409) Conflict.
+2026-11-16T23:30:14.4703450Z Response body: 
+2026-11-16T23:30:14.4703769Z {"requestId":"69013980-7f7b-4b11-8e03-7f79d955db7b","errorCode":"ItemDisplayNameNotAvailableYet","message":"Requested 
+2026-11-16T23:30:14.4704135Z 'den_acr_001_fnol_blob_created' is not available yet and is expected to become available in the upcoming 
+2026-11-16T23:30:14.4704371Z minutes.","isRetriable":true}
 
 
