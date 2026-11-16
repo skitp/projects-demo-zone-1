@@ -1,4 +1,4 @@
 Response body: 
-{"requestId":"657a1fb1-a0e0-42a5-8b5f-a546d2974b75","errorCode":"InvalidDefinitionFormat","message":"Requested item 
-definition format is invalid","isRetriable":false}
+{"requestId":"cf7b559a-be95-4c63-a1d1-e4c3e0ca0f8c","errorCode":"Activator_Alm_UserError","message":"BadRequest: 
+{\"Message\":\"The importArtifactRequest field is required.\"}","isRetriable":false}
 
