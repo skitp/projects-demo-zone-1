@@ -1,23 +1,14 @@
-##[debug]Entities snippet after substitution: [
-2026-11-16T23:30:12.9683687Z   {
-2026-11-16T23:30:12.9684543Z     "uniqueIdentifier": "6ff56a5d-44ad-4616-b2d4-62919f02c44c",
-2026-11-16T23:30:12.9684787Z     "payload": {
-2026-11-16T23:30:12.9684951Z       "name": "bhgdevdnafnolaieussa",
-2026-11-16T23:30:12.9685124Z       "connection": {
-2026-11-16T23:30:12.9685282Z         "scope": "SubArtifact",
-2026-11-16T23:30:12.9685545Z         "tenantId": "d9f7f9f1-c307-4884-ae62-0b13e49b2698",
-2026-11-16T23:30:12.9685828Z         "workspaceId": "382f4872-021b-4bf1-939c-d27612f4121a",
-2026-11-16T23:30:12.9686222Z         "subArtifactDisplayName": "/subscriptions/{{SUBSCRIPTION_ID}}/resourceGroups/{{RESOURCE_GR
-2026-11-16T23:30:12.9970369Z ##[debug]Creating new Activator: den_acr_001_fnol_blob_created (folderId: 92bbf74f-651b-4261-84fd-f21f95549fb1)
-2026-11-16T23:30:13.0022231Z ##[debug]Create request body (sanitized): {"displayName":"den_acr_001_fnol_blob_created","definition":{"parts":[{"payloadType":"InlineBase64","path":"ReflexEntities.json","payload":"<truncated>"},{"payloadType":"InlineBase64","path":".platform","payload":"<truncated>"}],"format":"json"},"folderId":"92bbf74f-651b-4261-84fd-f21f95549fb1"}
-2026-11-16T23:30:14.1803096Z ##[warning]Create with definition failed. Falling back to empty create + updateDefinition. Error: HTTP 400 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The remote server returned an error: (400) Bad Request.
-2026-11-16T23:30:14.1803805Z Response body: {"requestId":"a20dabc7-8187-41a5-8ccf-72f0e17556fb","errorCode":"InvalidDefinitionFormat","message":"Requested item definition format is invalid","isRetriable":false}
-2026-11-16T23:30:14.4700911Z C:\Program Files\AzurePipelines\_work\_temp\3c43ed9b-e44c-48ff-b718-5de40a5abbf6.ps1 : Error deploying Activators: 
-2026-11-16T23:30:14.4703029Z HTTP 409 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The 
-2026-11-16T23:30:14.4703279Z remote server returned an error: (409) Conflict.
-2026-11-16T23:30:14.4703450Z Response body: 
-2026-11-16T23:30:14.4703769Z {"requestId":"69013980-7f7b-4b11-8e03-7f79d955db7b","errorCode":"ItemDisplayNameNotAvailableYet","message":"Requested 
-2026-11-16T23:30:14.4704135Z 'den_acr_001_fnol_blob_created' is not available yet and is expected to become available in the upcoming 
-2026-11-16T23:30:14.4704371Z minutes.","isRetriable":true}
+ ##[debug]Create request body (sanitized): {"displayName":"den_acr_001_fnol_blob_created","definition":{"parts":[{"payloadType":"InlineBase64","path":"ReflexEntities.json","payload":"<truncated>"}],"format":"json"},"folderId":"92bbf74f-651b-4261-84fd-f21f95549fb1"}
+2026-11-17T00:07:32.8503453Z ##[warning]Create with definition failed. Falling back to empty create + updateDefinition. Error: HTTP 400 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes : The remote server returned an error: (400) Bad Request.
+2026-11-17T00:07:32.8504166Z Response body: {"requestId":"07f29d18-61a4-447d-9def-e9b686ce6dee","errorCode":"InvalidDefinitionFormat","message":"Requested item definition format is invalid","isRetriable":false}
+2026-11-17T00:07:32.9394297Z ##[debug]Name still reserved (attempt 1/5). Waiting 30 seconds...
+2026-11-17T00:08:24.5077611Z ##[debug]Empty Activator created with id 32874bfe-bd29-425e-8fa7-6a746894ecaf. Applying definition...
+2026-11-17T00:08:24.8343950Z C:\Program Files\AzurePipelines\_work\_temp\edd2ce6a-e08d-4683-b9a8-305597c4315f.ps1 : Error deploying Activators: 
+2026-11-17T00:08:24.8344469Z HTTP 400 calling https://api.fabric.microsoft.com/v1/workspaces/382f4872-021b-4bf1-939c-d27612f4121a/reflexes/32874bfe-
+2026-11-17T00:08:24.8344863Z bd29-425e-8fa7-6a746894ecaf/updateDefinition?updateMetadata=true : The remote server returned an error: (400) Bad 
+2026-11-17T00:08:24.8345070Z Request.
+2026-11-17T00:08:24.8345211Z Response body: 
+2026-11-17T00:08:24.8345535Z {"requestId":"e41cc14c-12fd-4554-98cf-c7706c280ce4","errorCode":"InvalidInput","message":"UpdateMetadata is true but 
+2026-11-17T00:08:24.8345802Z .platform file was not provided","isRetriable":false}
 
 
