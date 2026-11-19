@@ -1,0 +1,45 @@
+# Example YAML using CI/CD tokens (replace_yaml_tokens.py will substitute them)
+target:
+  lakehouse: den_lhw_dpr_001_claims_transaction
+  workspace_id: "{{target_workspace_id}}"
+  lakehouse_id: "{{target_lakehouse_id}}"
+  schema: claims_transaction
+  table: dim_cat
+  load_strategy: type_two
+  key_columns:
+    - cat_bus_key
+  unknown_record: True
+  identity: True
+  identity_column_name: cat_key
+
+source:
+  - name: curated_claims_catcodes
+    lakehouse: den_lhw_scu_001_claims_transaction_curated
+    workspace_id: "{{source_workspace_id}}"
+    lakehouse_id: "{{source_lakehouse_id}}"
+    schema: iis_transaction
+    table: claims_catcodes
+
+  - name: curated_claims_catastrophe
+    lakehouse: den_lhw_scu_001_claims_transaction_curated
+    schema: iis_transaction
+    table: claims_catastrophe
+
+  - name: curated_wcclaim
+    lakehouse: den_lhw_scu_001_claims_transaction_curated
+    schema: iis_transaction
+    table: wcclaim
+
+  - name: curated_claimant
+    lakehouse: den_lhw_scu_001_claims_transaction_curated
+    schema: iis_transaction
+    table: claimant
+
+query:
+  - name: cat_data_combined
+    sql: |
+      SELECT 1 AS placeholder
+
+  - name: dim_cat
+    sql: |
+      SELECT * FROM cat_data_combined

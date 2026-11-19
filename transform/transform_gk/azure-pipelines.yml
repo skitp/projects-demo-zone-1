@@ -1,0 +1,70 @@
+# Azure Pipelines – token replacement for cross-workspace YAML configs
+#
+# Expected pipeline variables (or variable group):
+#   SOURCE_WORKSPACE_ID
+#   SOURCE_LAKEHOUSE_ID
+#   TARGET_WORKSPACE_ID
+#   TARGET_LAKEHOUSE_ID
+#
+# The script replaces the corresponding {{...}} tokens in all YAML files
+# under the path given by the YAML_CONFIG_PATH variable (default: data_product).
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pr:
+  branches:
+    include:
+      - main
+      - develop
+
+variables:
+  # Override in the pipeline UI / variable group as needed
+  YAML_CONFIG_PATH: 'data_product'          # relative path to scan
+  PYTHON_VERSION: '3.11'
+
+stages:
+  - stage: ReplaceTokens
+    displayName: 'Replace YAML tokens'
+    jobs:
+      - job: TokenReplacement
+        displayName: 'Substitute workspace / lakehouse IDs'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '$(PYTHON_VERSION)'
+            displayName: 'Set up Python'
+
+          - script: |
+              python --version
+              python artifacts/replace_yaml_tokens.py \
+                --path "$(YAML_CONFIG_PATH)" \
+                --dry-run
+            displayName: 'Dry-run token replacement'
+            env:
+              SOURCE_WORKSPACE_ID: $(SOURCE_WORKSPACE_ID)
+              SOURCE_LAKEHOUSE_ID: $(SOURCE_LAKEHOUSE_ID)
+              TARGET_WORKSPACE_ID: $(TARGET_WORKSPACE_ID)
+              TARGET_LAKEHOUSE_ID: $(TARGET_LAKEHOUSE_ID)
+
+          - script: |
+              python artifacts/replace_yaml_tokens.py \
+                --path "$(YAML_CONFIG_PATH)"
+            displayName: 'Apply token replacement'
+            env:
+              SOURCE_WORKSPACE_ID: $(SOURCE_WORKSPACE_ID)
+              SOURCE_LAKEHOUSE_ID: $(SOURCE_LAKEHOUSE_ID)
+              TARGET_WORKSPACE_ID: $(TARGET_WORKSPACE_ID)
+              TARGET_LAKEHOUSE_ID: $(TARGET_LAKEHOUSE_ID)
+
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: '$(YAML_CONFIG_PATH)'
+              artifact: 'yaml-configs-resolved'
+            displayName: 'Publish resolved YAML configs'
+            condition: succeeded()
