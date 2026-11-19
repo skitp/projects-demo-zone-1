@@ -1,0 +1,108 @@
+target:
+  lakehouse: den_lhw_dpr_001_claims_transaction
+  # Optional cross-workspace support (omit both for same-workspace / shortcut):
+  # workspace_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  # lakehouse_id: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  schema: claims_transaction
+  table: dim_cat
+  load_strategy: type_two
+  key_columns:
+    - cat_bus_key
+  unknown_record: True
+  identity: True
+  identity_column_name: cat_key
+
+source:
+  - name: curated_claims_catcodes
+    lakehouse: den_lhw_scu_001_claims_transaction_curated
+    # Optional: workspace_id and lakehouse_id for cross-workspace sources
+    # workspace_id: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+    # lakehouse_id: "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+    schema: iis_transaction
+    table: claims_catcodes
+  
+  - name: curated_claims_catastrophe
+    lakehouse: den_lhw_scu_001_claims_transaction_curated
+    schema: iis_transaction
+    table: claims_catastrophe
+  
+  - name: curated_wcclaim
+    lakehouse: den_lhw_scu_001_claims_transaction_curated
+    schema: iis_transaction
+    table: wcclaim
+  
+  - name: curated_claimant
+    lakehouse: den_lhw_scu_001_claims_transaction_curated
+    schema: iis_transaction
+    table: claimant
+
+query:
+  - name: cat_data_combined
+    sql: |
+      SELECT 
+        CASE
+          WHEN UPPER(TRIM(c.lob)) IN ('BP','CA','HO','GL','IM') THEN cc.catastrophecodeid
+          ELSE cc2.catastrophecodeid
+        END AS cat_bus_key,
+        CAST(
+          CASE
+            WHEN UPPER(TRIM(c.lob)) IN ('BP','CA','HO','GL','IM') THEN d.catastrophecode
+            ELSE d2.catastrophecode
+          END AS STRING
+        ) AS cat_cd,
+        CASE
+          WHEN UPPER(TRIM(c.lob)) IN ('BP','CA','HO','GL','IM') THEN d.perils
+          ELSE d2.perils
+        END AS perils,
+        CASE 
+          WHEN COALESCE(d.CatastropheCode, d2.CatastropheCode) = '9998' THEN 'Winter Storm'
+          WHEN UPPER(TRIM(COALESCE(d.perils, d2.perils))) LIKE UPPER(TRIM('%wildfire%')) THEN 'Wildfire/Fire'
+          ELSE 'Other'
+        END AS cat_type,
+        CASE
+          WHEN UPPER(TRIM(c.lob)) IN ('BP','CA','HO','GL','IM') THEN d.effectivelowdate
+          ELSE d2.effectivelowdate
+        END AS cat_eff_start_date,
+        CASE
+          WHEN UPPER(TRIM(c.lob)) IN ('BP','CA','HO','GL','IM') THEN d.effectivehighdate
+          ELSE d2.effectivehighdate
+        END AS cat_eff_end_date,
+        CONCAT('(', 
+          DATE_FORMAT(CASE
+            WHEN UPPER(TRIM(c.lob)) IN ('BP','CA','HO','GL','IM') THEN d.effectivelowdate
+            ELSE d2.effectivelowdate
+          END, 'MM/dd/yyyy'), 
+          '-', 
+          DATE_FORMAT(CASE
+            WHEN UPPER(TRIM(c.lob)) IN ('BP','CA','HO','GL','IM') THEN d.effectivehighdate
+            ELSE d2.effectivehighdate
+          END, 'MM/dd/yyyy'), 
+          ')'
+        ) AS rptng_period,
+        c.lob
+      FROM curated_claimant c
+      INNER JOIN curated_wcclaim w ON c.wcclaimid = w.wcclaimid
+      LEFT JOIN curated_claims_catastrophe cc ON cc.sqlfield = 'OCCID' 
+        AND cc.sqlfieldvalue = CAST(w.occid AS STRING)
+      LEFT JOIN curated_claims_catcodes d ON d.catastrophecodeid = cc.catastrophecodeid
+      LEFT JOIN curated_claims_catastrophe cc2 ON cc2.sqlfield = 'Claimantid' 
+        AND cc2.sqlfieldvalue = CAST(c.claimantid AS STRING)
+      LEFT JOIN curated_claims_catcodes d2 ON d2.catastrophecodeid = cc2.catastrophecodeid
+      WHERE CASE
+          WHEN UPPER(TRIM(c.lob)) IN ('WC','DB') THEN COALESCE(CAST(d2.catastrophecode AS STRING), '--')
+          WHEN UPPER(TRIM(c.lob)) IN ('BP','CA','HO','GL','IM') THEN COALESCE(CAST(d.catastrophecode AS STRING), '--')
+          ELSE '--'
+        END <> '--'
+
+  - name: dim_cat
+    sql: |
+      SELECT DISTINCT
+        cat_bus_key,
+        cat_cd,
+        REGEXP_REPLACE(REGEXP_REPLACE(perils, '\\r', ''), '\\n', '') AS perils,
+        cat_type,
+        cat_eff_start_date,
+        cat_eff_end_date,
+        rptng_period
+      FROM cat_data_combined
+      WHERE cat_bus_key IS NOT NULL
