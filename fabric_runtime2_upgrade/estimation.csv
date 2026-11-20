@@ -1,3 +1,11 @@
+| Feature | Original SP | Pure Python SP | Why it changes |
+| Assessment & Inventory | 5 | 3 | Faster — no need to evaluate native build tooling |
+| Code & Dependency Compatibility | 8–13 | 5–8 | Usually only pin updates + light Python 3.13 fixes |
+| Wheel Rebuild & Packaging | 5–8 | 2–3 | poetry env use 3.13 + poetry build is enough |
+| Fabric Environment Validation | 8 | 5–6 | Still required, but lower chance of build/install failures |
+| Production Rollout & Cleanup | 5 | 3–4 | Same process, lower risk of surprises |
+| Total | 31–39 | 18–24 |  |
+
 | Task | Original Effort | Pure Python Effort | Notes |
 | Rebuild wheel | 4–8 h | 1–2 h | Just switch Poetry to 3.13 and rebuild |
 | Set up Python 3.13 build environment | 3 h | 1 h | poetry env use 3.13 |
