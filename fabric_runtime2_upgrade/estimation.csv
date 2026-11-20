@@ -1,0 +1,6 @@
+| Task | Original Effort | Pure Python Effort | Notes |
+| Rebuild wheel | 4–8 h | 1–2 h | Just switch Poetry to 3.13 and rebuild |
+| Set up Python 3.13 build environment | 3 h | 1 h | poetry env use 3.13 |
+| Update CI pipeline | 4 h | 1–2 h | Usually just change the Python version |
+| Fix Python 3.13 / PySpark incompatibilities | 8–16 h | 2–6 h | Most pure-Python code needs little or no change |
+| Environment publish + regression | 8–12 h | 4–8 h | Still the biggest remaining effort |
