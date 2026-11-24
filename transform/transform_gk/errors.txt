@@ -1,0 +1,2 @@
+Error processing dim_mkt_type: An error occurred while calling z:notebookutils.lakehouse.get.
+: com.microsoft.spark.notebook.msutils.ArtifactNotFoundException: Artifact 'den_lhw_dpr_001_data_product_tables' not found
