@@ -1,2 +1,7 @@
-Error processing dim_mkt_type: An error occurred while calling z:notebookutils.lakehouse.get.
+Resolved lakehouse 'den_lhw_dpr_001_data_product_tables' -> 017ccf2e-e71a-4db2-8002-29a4963d6982 in workspace 382f4872-021b-4bf1-939c-d27612f4121a
+INFO [2026-11-25 13:47:57,578] [transform.dim_mkt_type] _generate_source_views:306 - Source lakehouse 'den_lhw_dpr_001_data_product_tables' resolved (store_workspace_id=382f4872-021b-4bf1-939c-d27612f4121a)
+Source lakehouse 'den_lhw_dpr_001_data_product_tables' resolved (store_workspace_id=382f4872-021b-4bf1-939c-d27612f4121a)
+INFO [2026-11-25 13:48:08,704] [transform.dim_mkt_type] start_transform:456 - Source views and queries completed for dpr.dim_mkt_type (2 columns)
+Source views and queries completed for dpr.dim_mkt_type (2 columns)
+ERROR [2026-11-25 13:48:09,346] [transform.dim_mkt_type] start_transform:549 - Transform failed for dpr.dim_mkt_type: An error occurred while calling z:notebookutils.lakehouse.get.
 : com.microsoft.spark.notebook.msutils.ArtifactNotFoundException: Artifact 'den_lhw_dpr_001_data_product_tables' not found
